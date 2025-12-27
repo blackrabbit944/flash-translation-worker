@@ -113,24 +113,15 @@ export async function handleTranslation(request: IRequest, env: Env, ctx: Execut
 	};
 
 	// 5. Build Target URL
-	// Note: BidiGenerateContent is often v1alpha.
 	const targetUrl =
-		'https://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent?key=' +
+		'https://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=' +
 		env.GEMINI_API_KEY;
 
 	try {
 		console.log(`[Live] API Key used: ${env.GEMINI_API_KEY}`);
 		console.log(`[Live] Connecting to Gemini: ${targetUrl.replace(env.GEMINI_API_KEY, '***')}`);
 		const response = await fetch(targetUrl, {
-			headers: {
-				// Forward necessary headers? Or just basic?
-				// old.ts forwarded request.headers.
-				// But request.headers contains Host etc which might be wrong for Google.
-				// Usually fetch handles host.
-				// old.ts: headers: request.headers
-				// I'll be careful. If it worked in old.ts, I'll trust it, but typically we filter headers.
-				// However, Cloudflare's fetch might handle it.
-			},
+			headers: request.headers,
 			// @ts-ignore
 			webSocket: true,
 		});
@@ -234,13 +225,18 @@ export async function handleTranslation(request: IRequest, env: Env, ctx: Execut
 		const closeHandler = async (evt: any) => {
 			if (logged) return;
 			logged = true;
-			console.log('[Live] Connection closed.', evt && evt.type ? evt.type : '');
+
+			if (evt instanceof ErrorEvent || (evt && evt.error)) {
+				console.error('[Live] Connection Error Details:', evt.message || evt.error);
+			}
+
+			console.log('[Live] Connection closing. Source:', evt && evt.type ? evt.type : 'unknown');
 
 			try {
-				worker.close();
+				worker.close(1000, 'Work complete');
 			} catch {}
 			try {
-				serverWebSocket.close();
+				serverWebSocket.close(1000, 'Work complete');
 			} catch {}
 
 			// Log Usage
