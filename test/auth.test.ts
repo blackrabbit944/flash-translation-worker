@@ -11,7 +11,7 @@ describe('Auth', () => {
 	});
 
 	it('login creates a new user and returns tokens', async () => {
-		const credential = 'icloud_test_credential_1';
+		const credential = 'icloud_test_credential_1_32chars';
 		const request = new IncomingRequest('http://example.com/login', {
 			method: 'POST',
 			body: JSON.stringify({ credential }),
@@ -30,7 +30,7 @@ describe('Auth', () => {
 	});
 
 	it('login with existing user returns tokens', async () => {
-		const credential = 'icloud_test_credential_1'; // Same as above
+		const credential = 'icloud_test_credential_1_32chars'; // Same as above
 		const request = new IncomingRequest('http://example.com/login', {
 			method: 'POST',
 			body: JSON.stringify({ credential }),
@@ -46,7 +46,7 @@ describe('Auth', () => {
 
 	it('refresh token renews jwt and refresh token', async () => {
 		// First login to get tokens
-		const credential = 'icloud_test_credential_2';
+		const credential = 'icloud_test_credential_2_32chars';
 		const loginReq = new IncomingRequest('http://example.com/login', {
 			method: 'POST',
 			body: JSON.stringify({ credential }),

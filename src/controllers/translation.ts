@@ -1,33 +1,62 @@
 import { IRequest } from 'itty-router';
-import { AuthenticatedRequest } from '../middleware/auth';
+import { AuthenticatedRequest, withAuth } from '../middleware/auth';
 import { GeminiService } from '../services/gemini';
 
-import { getLanguageName } from '../utils/languages';
+import { getLanguageName, normalizeLanguageTag } from '../utils/languages';
 
 const geminiService = new GeminiService();
 
 import { logUsage } from '../models/usage';
 import { PRICING_PER_1M, PRICING_PER_1M_LIVE } from '../config/pricing';
 
+function isValidLanguageCode(code: string): boolean {
+	try {
+		const locale = new Intl.Locale(code);
+		return !!locale.language;
+	} catch (e) {
+		return false;
+	}
+}
+
 export async function handleTranslation(request: IRequest, env: Env, ctx: ExecutionContext) {
 	const authReq = request as AuthenticatedRequest;
 
 	// Validate auth
 	if (!authReq.userId) {
+		console.error('[Live] Unauthorized request');
 		return new Response('Unauthorized', { status: 401 });
 	}
 
 	const url = new URL(request.url);
+	const startTime = Date.now();
+
+	console.log(`[Live] New connection request from ${authReq.userId}. Params: ${url.searchParams.toString()}`);
 
 	// 1. Check WebSocket Upgrade
 	if (request.headers.get('Upgrade') !== 'websocket') {
+		console.error('[Live] Missing websocket upgrade header');
 		return new Response('Please connect via WebSocket', { status: 426 });
 	}
 
 	// 2. Parse Params
 	const params = url.searchParams;
-	const sourceLangName = params.get('sourceLanguage') || 'English';
-	const targetLangName = params.get('targetLanguage') || 'Chinese';
+
+	// Normalize and Validate
+	let sourceLangCode = params.get('sourceLanguage');
+	let targetLangCode = params.get('targetLanguage');
+
+	if (sourceLangCode) sourceLangCode = normalizeLanguageTag(sourceLangCode);
+	if (targetLangCode) targetLangCode = normalizeLanguageTag(targetLangCode);
+
+	if ((sourceLangCode && !isValidLanguageCode(sourceLangCode)) || (targetLangCode && !isValidLanguageCode(targetLangCode))) {
+		console.error(`[Live] Invalid language codes: ${sourceLangCode}, ${targetLangCode}`);
+		return new Response('Invalid language code: must be a valid BCP-47 language tag (e.g. "en-US", "zh-TW").', { status: 400 });
+	}
+
+	const sourceLangName = getLanguageName(sourceLangCode || 'en');
+	const targetLangName = getLanguageName(targetLangCode || 'zh');
+
+	console.log(`[Live] Languages: ${sourceLangName} (${sourceLangCode}) <-> ${targetLangName} (${targetLangCode})`);
 
 	// Validate params?
 	// old.ts didn't really validate existence, just defaults.
@@ -84,11 +113,14 @@ export async function handleTranslation(request: IRequest, env: Env, ctx: Execut
 	};
 
 	// 5. Build Target URL
+	// Note: BidiGenerateContent is often v1alpha.
 	const targetUrl =
-		'https://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=' +
+		'https://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent?key=' +
 		env.GEMINI_API_KEY;
 
 	try {
+		console.log(`[Live] API Key used: ${env.GEMINI_API_KEY}`);
+		console.log(`[Live] Connecting to Gemini: ${targetUrl.replace(env.GEMINI_API_KEY, '***')}`);
 		const response = await fetch(targetUrl, {
 			headers: {
 				// Forward necessary headers? Or just basic?
@@ -105,8 +137,13 @@ export async function handleTranslation(request: IRequest, env: Env, ctx: Execut
 
 		const serverWebSocket = response.webSocket;
 		if (!serverWebSocket) {
+			console.error(`[Live] Failed to webSocket upgrade with Gemini. Status: ${response.status} ${response.statusText}`);
+			const text = await response.text();
+			console.error(`[Live] Error body: ${text}`);
 			return new Response('Failed to connect to Gemini backend', { status: 500 });
 		}
+
+		console.log('[Live] Connected to Gemini. Accepting client connection.');
 
 		// 6. WebSocket Pair
 		const pair = new WebSocketPair();
@@ -194,9 +231,10 @@ export async function handleTranslation(request: IRequest, env: Env, ctx: Execut
 		// We need to ensure we log only once.
 		let logged = false;
 
-		const closeHandler = async () => {
+		const closeHandler = async (evt: any) => {
 			if (logged) return;
 			logged = true;
+			console.log('[Live] Connection closed.', evt && evt.type ? evt.type : '');
 
 			try {
 				worker.close();
@@ -244,7 +282,20 @@ export async function handleTranslation(request: IRequest, env: Env, ctx: Execut
 						pricing['text_output'] * text_output_tokens;
 
 					// Use 'live_translation' as endpoint
-					await logUsage(env.logs_db, authReq.userId, modelNameShort, audio_input_tokens, audio_output_tokens, cost, 'live_translation');
+					const endTime = Date.now();
+					const durationSeconds = Math.ceil((endTime - startTime) / 1000);
+					console.log(`[Live] Usage logged. Duration: ${durationSeconds}s, Cost: ${cost} micros`);
+					await logUsage(
+						env.logs_db,
+						authReq.userId,
+						modelNameShort,
+						audio_input_tokens,
+						audio_output_tokens,
+						cost,
+						'live_translation',
+						undefined,
+						durationSeconds
+					);
 				} else {
 					// Fallback to standard Text Pricing if model not in MultiModal config found (unlikely)
 				}
@@ -253,26 +304,27 @@ export async function handleTranslation(request: IRequest, env: Env, ctx: Execut
 
 		worker.addEventListener('close', closeHandler);
 		serverWebSocket.addEventListener('close', closeHandler);
-		worker.addEventListener('error', closeHandler);
-		serverWebSocket.addEventListener('error', closeHandler);
+		worker.addEventListener('error', (e) => {
+			console.error('[Live] Worker WebSocket error:', e);
+			closeHandler(e);
+		});
+		serverWebSocket.addEventListener('error', (e) => {
+			console.error('[Live] Gemini WebSocket error:', e);
+			closeHandler(e);
+		});
 
 		return new Response(null, {
 			status: 101,
 			webSocket: client,
 		});
 	} catch (err: any) {
+		console.error('[Live] Connection failed (catch block):', err);
 		return new Response('Connection failed: ' + err.message, { status: 500 });
 	}
 }
 
 export async function handleTextTranslation(request: IRequest, env: Env, ctx: ExecutionContext) {
-	const authReq = request as AuthenticatedRequest;
-
-	// Validate that auth middleware actually ran
-	if (!authReq.userId) {
-		return new Response('Unauthorized', { status: 401 });
-	}
-
+	// Parse body first to check cache
 	let body;
 	try {
 		body = (await request.json()) as any;
@@ -280,13 +332,57 @@ export async function handleTextTranslation(request: IRequest, env: Env, ctx: Ex
 		return new Response('Invalid JSON', { status: 400 });
 	}
 
+	// Validate language codes
 	// Support both new (source_language) and old (source_lang) formats
+	// Normalize and Validate
 	const text = body.text;
-	const sourceLangCode = body.source_language || body.source_lang;
-	const targetLangCode = body.target_language || body.target_lang;
+	let sourceLangCode = body.source_language || body.source_lang;
+	let targetLangCode = body.target_language || body.target_lang;
+
+	if (sourceLangCode) sourceLangCode = normalizeLanguageTag(sourceLangCode);
+	if (targetLangCode) targetLangCode = normalizeLanguageTag(targetLangCode);
 
 	if (!text || !sourceLangCode || !targetLangCode) {
 		return new Response('Missing required fields: text, source_language, target_language', { status: 400 });
+	}
+
+	if (!isValidLanguageCode(sourceLangCode) || !isValidLanguageCode(targetLangCode)) {
+		return new Response('Invalid language code: must be a valid BCP-47 language tag (e.g. "en-US", "zh-TW")', { status: 400 });
+	}
+
+	// 1. Check Cache (Allow quota exceeded users to access cached content)
+	const cachedResult = await geminiService.findInCache(env, text, sourceLangCode, targetLangCode);
+	if (cachedResult) {
+		console.log('Cache hit for:', text);
+		// Return cached result as SSE
+		const mimicResponse = {
+			candidates: [
+				{
+					content: { parts: [{ text: cachedResult }] },
+				},
+			],
+		};
+		const sseData = `data: ${JSON.stringify(mimicResponse)}\n\n`;
+
+		return new Response(sseData, {
+			headers: {
+				'Content-Type': 'text/event-stream',
+				'Cache-Control': 'no-cache',
+				Connection: 'keep-alive',
+			},
+		});
+	}
+
+	// 2. Cache Miss: Perform Authentication and Quota Check
+	const authResponse = await withAuth(request, env, ctx);
+	if (authResponse) {
+		return authResponse;
+	}
+
+	// Auth success
+	const authReq = request as AuthenticatedRequest;
+	if (!authReq.userId) {
+		return new Response('Unauthorized', { status: 401 });
 	}
 
 	const sourceLangName = getLanguageName(sourceLangCode);
@@ -326,12 +422,19 @@ export async function handleImageTranslation(request: IRequest, env: Env, ctx: E
 
 	const imageBase64 = body.image;
 	const mimeType = body.mime_type || 'image/jpeg';
-	const sourceLangCode = body.source_language || body.source_lang;
-	const targetLangCode = body.target_language || body.target_lang;
+	let sourceLangCode = body.source_language || body.source_lang;
+	let targetLangCode = body.target_language || body.target_lang;
 	const promptUser = body.prompt || '';
+
+	if (sourceLangCode) sourceLangCode = normalizeLanguageTag(sourceLangCode);
+	if (targetLangCode) targetLangCode = normalizeLanguageTag(targetLangCode);
 
 	if (!imageBase64 || !sourceLangCode || !targetLangCode) {
 		return new Response('Missing required fields: image, source_language, target_language', { status: 400 });
+	}
+
+	if (!isValidLanguageCode(sourceLangCode) || !isValidLanguageCode(targetLangCode)) {
+		return new Response('Invalid language code: must be a valid BCP-47 language tag (e.g. "en-US", "zh-TW")', { status: 400 });
 	}
 
 	// Validate Image Size (Approx 5MB Limit)

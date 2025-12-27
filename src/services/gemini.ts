@@ -28,6 +28,19 @@ async function getMd5(text: string): Promise<string> {
 }
 
 export class GeminiService {
+	async findInCache(env: Env, text: string, sourceLang: string, targetLang: string): Promise<string | null> {
+		const textHash = await getMd5(text);
+		const db = createDb(env.words_db);
+		const cached = await db
+			.select()
+			.from(translations)
+			.where(
+				and(eq(translations.sourceTextHash, textHash), eq(translations.sourceLang, sourceLang), eq(translations.targetLang, targetLang))
+			)
+			.get();
+		return cached ? cached.resultJson : null;
+	}
+
 	async translateAndStream(
 		env: Env,
 		userId: string,
@@ -41,22 +54,15 @@ export class GeminiService {
 		const textHash = await getMd5(text);
 
 		// 1. Check Cache
-		const db = createDb(env.words_db);
-		const cached = await db
-			.select()
-			.from(translations)
-			.where(
-				and(eq(translations.sourceTextHash, textHash), eq(translations.sourceLang, sourceLang), eq(translations.targetLang, targetLang))
-			)
-			.get();
+		const cachedResult = await this.findInCache(env, text, sourceLang, targetLang);
 
-		if (cached) {
+		if (cachedResult) {
 			console.log('Cache hit for:', text);
 			// Return cached result as SSE to mimic Gemini stream for client compatibility
 			const mimicResponse = {
 				candidates: [
 					{
-						content: { parts: [{ text: cached.resultJson }] },
+						content: { parts: [{ text: cachedResult }] },
 					},
 				],
 			};
@@ -164,6 +170,8 @@ export class GeminiService {
 			async (fullText) => {
 				// Cache Callback
 				if (fullText) {
+					// Re-create DB connection here since we are inside a callback
+					const db = createDb(env.words_db);
 					await db
 						.insert(translations)
 						.values({
@@ -288,8 +296,9 @@ The user's mother tongue is ${targetLangName}. Therefore, your output should be 
 		const encoder = new TextEncoder();
 		const decoder = new TextDecoder();
 
-		let usageMetadata = { promptTokenCount: 0, candidatesTokenCount: 0 };
+		let usageMetadata = { promptTokenCount: 0, candidatesTokenCount: 0, thoughtsTokenCount: 0 };
 		let fullText = '';
+		let buffer = '';
 
 		const processPromise = (async () => {
 			try {
@@ -303,8 +312,12 @@ The user's mother tongue is ${targetLangName}. Therefore, your output should be 
 					// Pass chunk to client immediately
 					await writer.write(encoder.encode(chunk));
 
-					// Log usage metadata if present
-					const lines = chunk.split('\n');
+					// Append chunk to buffer and parse lines
+					buffer += chunk;
+					const lines = buffer.split('\n');
+					// The last line might be incomplete, keep it in buffer
+					buffer = lines.pop() || '';
+
 					for (const line of lines) {
 						if (line.startsWith('data: ')) {
 							const jsonStr = line.slice(6);
@@ -322,6 +335,20 @@ The user's mother tongue is ${targetLangName}. Therefore, your output should be 
 						}
 					}
 				}
+
+				// Process any remaining buffer (though usually SSE ends with newline)
+				if (buffer.startsWith('data: ')) {
+					try {
+						const jsonStr = buffer.slice(6);
+						const data = JSON.parse(jsonStr);
+						if (data.usageMetadata) {
+							usageMetadata = data.usageMetadata;
+						}
+						if (data.candidates && data.candidates[0]?.content?.parts?.[0]?.text) {
+							fullText += data.candidates[0].content.parts[0].text;
+						}
+					} catch (e) {}
+				}
 			} catch (err) {
 				console.error('Stream processing error:', err);
 			} finally {
@@ -330,7 +357,7 @@ The user's mother tongue is ${targetLangName}. Therefore, your output should be 
 				if (usageMetadata.promptTokenCount > 0) {
 					const prices = PRICING_PER_1M['gemini-3-flash-preview'];
 					const inputTokens = usageMetadata.promptTokenCount;
-					const outputTokens = usageMetadata.candidatesTokenCount;
+					const outputTokens = usageMetadata.candidatesTokenCount + (usageMetadata.thoughtsTokenCount || 0);
 					const cost = Math.ceil(inputTokens * prices.input + outputTokens * prices.output);
 
 					await logUsage(env.logs_db, userId, modelName, inputTokens, outputTokens, cost, endpoint, requestHash);

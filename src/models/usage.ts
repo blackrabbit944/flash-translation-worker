@@ -5,8 +5,9 @@ import { usageLogs } from '../db/schema';
 export async function getUsageStats(
 	d1: D1Database,
 	userId: string,
-	endpoint: string = 'text_translation'
-): Promise<{ daily: number; monthly: number }> {
+	endpoint: string = 'text_translation',
+	includeTotal: boolean = false
+): Promise<{ daily: number; monthly: number; total: number }> {
 	const db = createDb(d1);
 	const now = new Date();
 
@@ -19,19 +20,29 @@ export async function getUsageStats(
 	startOfMonth.setHours(0, 0, 0, 0);
 	const startOfMonthTs = startOfMonth.getTime();
 
-	// Use conditional aggregation for single query efficiency
+	// If we need total, we must scan everything (no time filter).
+	// If we ONLY need daily/monthly, we can optimize by filtering >= startOfMonth.
+	const timeFilter = includeTotal ? undefined : gte(usageLogs.createdAt, startOfMonthTs);
+	const filters = [eq(usageLogs.userId, userId), eq(usageLogs.endpoint, endpoint)];
+	if (timeFilter) filters.push(timeFilter);
+
+	const isLive = endpoint === 'live_translation';
+	const valueExpression = isLive ? sql`COALESCE(${usageLogs.durationSeconds}, 0)` : sql`1`;
+
 	const result = await db
 		.select({
-			daily: sql<number>`sum(case when ${usageLogs.createdAt} >= ${startOfDayTs} then 1 else 0 end)`,
-			monthly: sql<number>`sum(case when ${usageLogs.createdAt} >= ${startOfMonthTs} then 1 else 0 end)`,
+			daily: sql<number>`sum(case when ${usageLogs.createdAt} >= ${startOfDayTs} then ${valueExpression} else 0 end)`,
+			monthly: sql<number>`sum(case when ${usageLogs.createdAt} >= ${startOfMonthTs} then ${valueExpression} else 0 end)`,
+			total: includeTotal ? sql<number>`sum(${valueExpression})` : sql<number>`0`,
 		})
 		.from(usageLogs)
-		.where(and(eq(usageLogs.userId, userId), eq(usageLogs.endpoint, endpoint), gte(usageLogs.createdAt, startOfMonthTs)))
+		.where(and(...filters))
 		.get();
 
 	return {
 		daily: result?.daily || 0,
 		monthly: result?.monthly || 0,
+		total: result?.total || 0,
 	};
 }
 
@@ -48,7 +59,8 @@ export async function logUsage(
 	outputTokens: number,
 	costMicros: number,
 	endpoint: string = 'text_translation',
-	requestHash?: string
+	requestHash?: string,
+	durationSeconds?: number
 ): Promise<void> {
 	const db = createDb(d1);
 	await db
@@ -61,6 +73,7 @@ export async function logUsage(
 			inputTokens,
 			outputTokens,
 			costMicros,
+			durationSeconds: durationSeconds || null,
 			requestHash: requestHash || null,
 			createdAt: Date.now(),
 		})

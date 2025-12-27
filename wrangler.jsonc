@@ -29,7 +29,7 @@
 			"database_id": "logs-db-id-placeholder",
 			"migrations_dir": "migrations/usage_logs"
 		}
-	]
+	],
 	/**
 	 * Smart Placement
 	 * https://developers.cloudflare.com/workers/configuration/smart-placement/#smart-placement
@@ -57,5 +57,11 @@
 	 * Service Bindings (communicate between multiple Workers)
 	 * https://developers.cloudflare.com/workers/wrangler/configuration/#service-bindings
 	 */
-	// "services": [  {   "binding": "MY_SERVICE",   "service": "my-service"  } ]
+	// "services": [  {   "binding": "MY_SERVICE",   "service": "my-service"  } ],
+	"r2_buckets": [
+		{
+			"binding": "TTS_BUCKET",
+			"bucket_name": "tts-audio-store"
+		}
+	]
 }

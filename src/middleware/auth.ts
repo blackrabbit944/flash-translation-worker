@@ -9,7 +9,7 @@ export interface AuthenticatedRequest extends IRequest {
 	membershipTier: MembershipTier;
 }
 
-export async function withAuth(request: IRequest, env: Env) {
+export async function withAuth(request: IRequest, env: Env, ctx: ExecutionContext) {
 	const authHeader = request.headers.get('Authorization');
 	if (!authHeader) {
 		return new Response('Missing Authorization header', { status: 401 });
@@ -55,8 +55,9 @@ export async function withAuth(request: IRequest, env: Env) {
 		// Get Limits
 		const limits = TIER_LIMITS[tier][resourceType];
 
-		// Check Rate Limit (Daily and Monthly)
-		const usage = await getUsageStats(env.logs_db, userId, resourceType);
+		// Check Rate Limit (Daily and Monthly) + Total if needed
+		const needTotal = limits.total !== undefined;
+		const usage = await getUsageStats(env.logs_db, userId, resourceType, needTotal);
 
 		if (usage.daily >= limits.daily) {
 			return new Response(`Daily Rate limit exceeded for ${tier} tier on ${resourceType}. Limit: ${limits.daily}, Used: ${usage.daily}`, {
@@ -69,6 +70,12 @@ export async function withAuth(request: IRequest, env: Env) {
 				`Monthly Rate limit exceeded for ${tier} tier on ${resourceType}. Limit: ${limits.monthly}, Used: ${usage.monthly}`,
 				{ status: 429 }
 			);
+		}
+
+		if (limits.total !== undefined && usage.total >= limits.total) {
+			return new Response(`Total Usage limit exceeded for ${tier} tier on ${resourceType}. Limit: ${limits.total}, Used: ${usage.total}`, {
+				status: 429,
+			});
 		}
 	} catch (err) {
 		console.error('Auth error:', err);

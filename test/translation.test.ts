@@ -60,8 +60,8 @@ describe('Text Translation API', () => {
 				id: 'test_cache_1',
 				sourceTextHash: hash,
 				sourceText: text,
-				sourceLang: 'en',
-				targetLang: 'zh',
+				sourceLang: 'en-US',
+				targetLang: 'zh-CN',
 				resultJson: resultJson,
 				createdAt: Date.now(),
 			})
@@ -129,5 +129,89 @@ describe('Text Translation API', () => {
 
 		expect(response.status).toBe(429);
 		expect(bodyText).toContain('Rate limit exceeded');
+	});
+	it('enforces total usage limit for free tier (text)', async () => {
+		const totalUserId = 'total_user_text';
+		const payload = { uid: totalUserId, exp: Math.floor(Date.now() / 1000) + 3600 };
+		const token = await sign(payload, env.JWT_SECRET);
+
+		const db = createDb(env.logs_db);
+		const limit = 10;
+		const twoMonthsAgo = Date.now() - 60 * 24 * 60 * 60 * 1000;
+
+		for (let i = 0; i < limit; i++) {
+			await db
+				.insert(usageLogs)
+				.values({
+					id: `total_text_${i}`,
+					userId: totalUserId,
+					endpoint: 'text_translation',
+					model: 'test',
+					inputTokens: 10,
+					outputTokens: 10,
+					costMicros: 100,
+					createdAt: twoMonthsAgo,
+				})
+				.execute();
+		}
+
+		const request = new IncomingRequest('http://example.com/translation/text', {
+			method: 'POST',
+			headers: { Authorization: `Bearer ${token}` },
+			body: JSON.stringify({ text: 'fail', source_language: 'en', target_language: 'zh' }),
+		});
+
+		const ctx = createExecutionContext();
+		const response = await worker.fetch(request, env, ctx);
+		const bodyText = await response.text();
+		await waitOnExecutionContext(ctx);
+
+		expect(response.status).toBe(429);
+		expect(bodyText).toContain('Total Usage limit exceeded');
+	});
+
+	it('enforces total usage limit for free tier (image)', async () => {
+		const totalUserId = 'total_user_image';
+		const payload = { uid: totalUserId, exp: Math.floor(Date.now() / 1000) + 3600 };
+		const token = await sign(payload, env.JWT_SECRET);
+
+		const db = createDb(env.logs_db);
+		const limit = 3; // FREE tier image limit is 3
+		const twoMonthsAgo = Date.now() - 60 * 24 * 60 * 60 * 1000;
+
+		for (let i = 0; i < limit; i++) {
+			await db
+				.insert(usageLogs)
+				.values({
+					id: `total_image_${i}`,
+					userId: totalUserId,
+					endpoint: 'image_translation',
+					model: 'test',
+					inputTokens: 10,
+					outputTokens: 10,
+					costMicros: 100,
+					createdAt: twoMonthsAgo,
+				})
+				.execute();
+		}
+
+		const request = new IncomingRequest('http://example.com/translation/image', {
+			method: 'POST',
+			headers: { Authorization: `Bearer ${token}` },
+			body: JSON.stringify({
+				image: 'base64data',
+				mime_type: 'image/jpeg',
+				source_language: 'en',
+				target_language: 'zh',
+			}),
+		});
+
+		const ctx = createExecutionContext();
+		const response = await worker.fetch(request, env, ctx);
+		const bodyText = await response.text();
+		await waitOnExecutionContext(ctx);
+
+		expect(response.status).toBe(429);
+		expect(bodyText).toContain('Total Usage limit exceeded');
 	});
 });

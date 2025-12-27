@@ -87,9 +87,11 @@ describe('Live Translation API (Placeholder Verification)', () => {
 		const token = await sign(payload, env.JWT_SECRET);
 
 		// Seed 5 usage logs (Live Translation daily limit for FREE is 5)
-		for (let i = 0; i < 5; i++) {
-			await Usage.logUsage(env.logs_db, userId, 'test-model', 10, 10, 20, 'live_translation');
-		}
+
+		// Seed usage to exceed limit (Daily Free Limit is 300 seconds/units?? Check limits.ts. Assuming 300.)
+		// getUsageStats uses durationSeconds for live_translation.
+		// So we insert one log with > 300 duration.
+		await Usage.logUsage(env.logs_db, userId, 'test-model', 10, 10, 20, 'live_translation', undefined, 301);
 
 		const request = new IncomingRequest('http://example.com/translation/live', {
 			headers: { Authorization: `Bearer ${token}` },

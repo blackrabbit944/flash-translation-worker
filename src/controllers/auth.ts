@@ -10,6 +10,10 @@ export async function handleLogin(request: IRequest, env: Env) {
 		return new Response('Credential is required', { status: 400 });
 	}
 
+	if (credential.length !== 32) {
+		return new Response('Credential must be a 32-character string', { status: 400 });
+	}
+
 	let user = await findUserByCredential(env.users_db, credential);
 	let isNewUser = false;
 

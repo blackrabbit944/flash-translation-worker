@@ -4,23 +4,29 @@ export type MembershipTier = 'FREE' | 'PRO' | 'UNLIMITED';
 export interface Quota {
 	daily: number;
 	monthly: number;
+	total?: number;
 }
 
 export const TIER_LIMITS: Record<MembershipTier, Record<ResourceType, Quota>> = {
+	// FREE: {
+	// 	text_translation: { daily: 3, monthly: 10, total: 10 },
+	// 	image_translation: { daily: 1, monthly: 3, total: 3 },
+	// 	live_translation: { daily: 300, monthly: 300, total: 300 },
+	// },
 	FREE: {
-		text_translation: { daily: 5, monthly: 150 },
-		image_translation: { daily: 1, monthly: 30 },
-		live_translation: { daily: 5, monthly: 5 },
+		text_translation: { daily: 300, monthly: 1000, total: 1000 },
+		image_translation: { daily: 100, monthly: 300, total: 300 },
+		live_translation: { daily: 300, monthly: 300, total: 300 },
 	},
 	PRO: {
 		text_translation: { daily: 100, monthly: 3000 },
 		image_translation: { daily: 100, monthly: 3000 },
-		live_translation: { daily: 120, monthly: 1800 },
+		live_translation: { daily: 7200, monthly: 108000 },
 	},
 	UNLIMITED: {
 		text_translation: { daily: 1000, monthly: 30000 },
 		image_translation: { daily: 1000, monthly: 30000 },
-		live_translation: { daily: 720, monthly: 3500 },
+		live_translation: { daily: 43200, monthly: 648000 },
 	},
 };
 

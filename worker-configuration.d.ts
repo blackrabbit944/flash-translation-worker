@@ -16,6 +16,9 @@ declare namespace Cloudflare {
 		LOGS_MIGRATIONS: D1Migration[];
 		REVENUECAT_WEBHOOK_SECRET: string;
 		CLOUDFLARE_GATEWAY_TOKEN: string;
+		TTS_BUCKET: R2Bucket;
+		ENVIRONMENT: string;
+		R2_PUBLIC_DOMAIN: string;
 	}
 }
 interface Env extends Cloudflare.Env {}

@@ -37,6 +37,23 @@ export const translations = sqliteTable('translations', {
 		.default(sql`(strftime('%s', 'now') * 1000)`),
 });
 
+export const ttsLogs = sqliteTable('tts_logs', {
+	id: text('id').primaryKey(),
+	userId: text('user_id').notNull(),
+	inputTokens: integer('input_tokens').notNull(),
+	outputTokens: integer('output_tokens').notNull(),
+	text: text('text').notNull(),
+	costMicros: integer('cost_micros').notNull(),
+	textHash: text('text_hash').notNull(),
+	voiceName: text('voice_name').notNull(),
+	modelName: text('model_name').notNull(),
+	languageCode: text('language_code'),
+	url: text('url'),
+	createdAt: integer('created_at')
+		.notNull()
+		.default(sql`(strftime('%s', 'now') * 1000)`),
+});
+
 // Logs DB
 export const usageLogs = sqliteTable(
 	'usage_logs',
@@ -48,6 +65,7 @@ export const usageLogs = sqliteTable(
 		inputTokens: integer('input_tokens').notNull(),
 		outputTokens: integer('output_tokens').notNull(),
 		costMicros: integer('cost_micros').notNull(),
+		durationSeconds: integer('duration_seconds'),
 		requestHash: text('request_hash'),
 		createdAt: integer('created_at')
 			.notNull()

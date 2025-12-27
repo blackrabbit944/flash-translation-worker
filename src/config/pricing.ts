@@ -16,4 +16,10 @@ export const PRICING_PER_1M_LIVE: Record<string, { text_input: number; text_outp
 		audio_input: 3, // Assumption
 		audio_output: 12, // Assumption
 	},
+	'gemini-2.5-flash-preview-tts': {
+		text_input: 0.075, // Standard Flash Text input
+		text_output: 0, // No text output
+		audio_input: 0, // No audio input
+		audio_output: 12, // Audio output (approx 3-4x text?) - Let's assume high
+	},
 };
