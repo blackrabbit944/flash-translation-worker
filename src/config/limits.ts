@@ -23,18 +23,18 @@ export const TIER_LIMITS: Record<MembershipTier, Record<ResourceType, Quota>> = 
 		recognition: { daily: 300, monthly: 1000, total: 1000 },
 	},
 	PRO: {
-		text_translation: { daily: 100, monthly: 3000 },
-		image_translation: { daily: 100, monthly: 3000 },
+		text_translation: { daily: 100, monthly: 500 },
+		image_translation: { daily: 100, monthly: 300 },
 		live_translation: { daily: 7200, monthly: 108000 },
-		tts: { daily: 100, monthly: 3000 },
-		recognition: { daily: 100, monthly: 3000 },
+		tts: { daily: 500, monthly: 3000 },
+		recognition: { daily: 100, monthly: 1000 },
 	},
 	UNLIMITED: {
-		text_translation: { daily: 1000, monthly: 30000 },
-		image_translation: { daily: 1000, monthly: 30000 },
-		live_translation: { daily: 43200, monthly: 648000 },
-		tts: { daily: 100, monthly: 3000 },
-		recognition: { daily: 100, monthly: 3000 },
+		text_translation: { daily: 500, monthly: 2000 },
+		image_translation: { daily: 150, monthly: 1200 },
+		live_translation: { daily: 72000, monthly: 324000 },
+		tts: { daily: 1000, monthly: 6000 },
+		recognition: { daily: 100, monthly: 2000 },
 	},
 };
 
