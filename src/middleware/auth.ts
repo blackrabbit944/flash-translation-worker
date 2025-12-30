@@ -44,9 +44,9 @@ export async function withAuth(request: IRequest, env: Env, ctx: ExecutionContex
 		const activeEntitlements = entitlements.filter((e) => e.status === 'active' && (e.expiresAt === null || e.expiresAt > Date.now()));
 		const entitlementIds = activeEntitlements.map((e) => e.entitlementId);
 
-		if (entitlementIds.includes('unlimited_membership')) {
+		if (entitlementIds.includes('unlimited_member')) {
 			tier = 'UNLIMITED';
-		} else if (entitlementIds.includes('pro_membership')) {
+		} else if (entitlementIds.includes('pro_member')) {
 			tier = 'PRO';
 		}
 
@@ -60,12 +60,14 @@ export async function withAuth(request: IRequest, env: Env, ctx: ExecutionContex
 		const usage = await getUsageStats(env.logs_db, userId, resourceType, needTotal);
 
 		if (usage.daily >= limits.daily) {
+			console.log('用户超过了日使用量限制');
 			return new Response(`Daily Rate limit exceeded for ${tier} tier on ${resourceType}. Limit: ${limits.daily}, Used: ${usage.daily}`, {
 				status: 429,
 			});
 		}
 
 		if (usage.monthly >= limits.monthly) {
+			console.log('用户超过了月使用量限制');
 			return new Response(
 				`Monthly Rate limit exceeded for ${tier} tier on ${resourceType}. Limit: ${limits.monthly}, Used: ${usage.monthly}`,
 				{ status: 429 }
@@ -73,6 +75,7 @@ export async function withAuth(request: IRequest, env: Env, ctx: ExecutionContex
 		}
 
 		if (limits.total !== undefined && usage.total >= limits.total) {
+			console.log('用户超过了总使用量限制');
 			return new Response(`Total Usage limit exceeded for ${tier} tier on ${resourceType}. Limit: ${limits.total}, Used: ${usage.total}`, {
 				status: 429,
 			});

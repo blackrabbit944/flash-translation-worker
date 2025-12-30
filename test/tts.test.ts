@@ -3,7 +3,7 @@ import { describe, it, expect, beforeAll, afterEach } from 'vitest';
 import worker from '../src/index';
 // @ts-ignore
 import { createDb } from '../src/db';
-import { ttsLogs } from '../src/db/schema';
+import { ttsLogs, usageLogs } from '../src/db/schema';
 import { sign } from '../src/utils/jwt';
 
 const IncomingRequest = Request<unknown, IncomingRequestCfProperties>;
@@ -146,7 +146,24 @@ describe('TTS API', () => {
 		expect(logs[0].inputTokens).toBe(10);
 		expect(logs[0].outputTokens).toBe(100);
 		expect(logs[0].url).toContain('r2://');
+		// Verify Usage DB Log
+		const logsDb = createDb(env.logs_db);
+		const uLogs = await logsDb.select().from(usageLogs).execute();
+		const relatedUsage = uLogs.find((l) => l.userId === userId && l.endpoint === 'tts');
+		expect(relatedUsage).toBeDefined();
+		if (relatedUsage) {
+			expect(relatedUsage.inputTokens).toBe(10);
+			expect(relatedUsage.outputTokens).toBe(100);
+			expect(relatedUsage.model).toBe('gemini-2.5-flash-preview-tts');
+
+			// Pricing:
+			// Input (Text): 10 * 0.5 = 5
+			// Output (Audio): 100 * 10 = 1000
+			// Total: 1005
+			expect(relatedUsage.costMicros).toBe(1005);
+		}
 	});
+
 	it.skip('REAL INTEGRATION: calls Google Gemini API and returns audio', async () => {
 		if (!env.GEMINI_API_KEY) {
 			console.warn('Skipping real integration test because GEMINI_API_KEY is missing');

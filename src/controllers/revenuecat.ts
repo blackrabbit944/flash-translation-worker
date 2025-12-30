@@ -1,4 +1,5 @@
 import { upsertUserEntitlement } from '../models/subscription';
+import { findUserByCredential } from '../models/user';
 
 export async function handleRevenueCatWebhook(request: Request, env: Env): Promise<Response> {
 	const authHeader = request.headers.get('Authorization');
@@ -14,47 +15,29 @@ export async function handleRevenueCatWebhook(request: Request, env: Env): Promi
 			return new Response('Invalid payload', { status: 400 });
 		}
 
-		const userId = event.app_user_id;
+		console.log('[revenuecat-event]', event);
+		const appUserId = event.app_user_id;
+
+		// 1. Resolve internal UUID from credentials (appUserId)
+		const user = await findUserByCredential(env.users_db, appUserId);
+		const targetUserId = user ? user.id : appUserId;
+
 		const entitlementIds = event.entitlement_ids || [];
 		const expirationAtMs = event.expiration_at_ms;
 
-		// Map RevenueCat types to our status
-		// We fundamentally care if they have access or not.
-		// If it's a cancellation or expiration, we might mark as expired.
-		// However, usually RevenueCat sends the current state.
-
-		let status = 'active';
-		if (event.type === 'CANCELLATION' || event.type === 'EXPIRATION') {
-			// For expiration, it's definitely not active.
-			// For cancellation, they might still have time left, but usually expiration_at_ms tells the truth.
-			// If expiration_at_ms is in the past, it's expired.
-		}
-
-		// RevenueCat webhooks can be complex. For this MVP:
-		// We trust the entitlements list and expiration date provided in the event if available.
-		// Or we might need to fetch the customer info if the webhook is lightweight.
-		// Assuming 'event' contains enough info or we simply update based on the event type.
-
-		// A simpler approach for the requested features:
-		// Update the specific entitlement related to the product/event.
-
-		// However, the event might affect multiple entitlements or specific ones.
-		// Let's iterate over affected entitlements if provided.
-
 		if (entitlementIds.length > 0) {
-			// Determine status based on event type
-			// INITIAL_PURCHASE, RENEWAL, PRODUCT_CHANGE, UNPAUSED -> active
-			// EXPIRATION -> expired
-			// CANCELLATION -> active (until expiration), but we might want to flag it?
-			// For now, we rely on expiration_at_ms. If it's valid and in future, it's active.
-
 			let newStatus = 'active';
 			if (event.type === 'EXPIRATION') {
 				newStatus = 'expired';
 			}
 
 			for (const entId of entitlementIds) {
-				await upsertUserEntitlement(env.users_db, userId, entId, expirationAtMs, newStatus);
+				await upsertUserEntitlement(env.users_db, targetUserId, entId, expirationAtMs, newStatus, appUserId);
+			}
+
+			// Clean up old memberships if this is an upgrade (PRODUCT_CHANGE to UNLIMITED)
+			if (event.type === 'PRODUCT_CHANGE' && entitlementIds.includes('unlimited_member')) {
+				await upsertUserEntitlement(env.users_db, targetUserId, 'pro_member', Date.now(), 'superseded', appUserId);
 			}
 
 			// Handle Transfers: Remove entitlements from the previous owner

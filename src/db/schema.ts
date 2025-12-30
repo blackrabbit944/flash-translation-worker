@@ -14,6 +14,7 @@ export const userEntitlements = sqliteTable(
 	{
 		userId: text('user_id').notNull(),
 		entitlementId: text('entitlement_id').notNull(),
+		originalAppUserId: text('original_app_user_id'),
 		expiresAt: integer('expires_at'),
 		status: text('status').notNull(),
 		updatedAt: integer('updated_at')
@@ -22,6 +23,7 @@ export const userEntitlements = sqliteTable(
 	},
 	(table) => ({
 		pk: primaryKey({ columns: [table.userId, table.entitlementId] }),
+		idxOriginalAppUserId: index('idx_user_entitlements_original_app_user_id').on(table.originalAppUserId),
 	})
 );
 // Words DB
@@ -75,3 +77,39 @@ export const usageLogs = sqliteTable(
 		idxUserEndpointCreated: index('idx_usage_logs_user_endpoint_created').on(table.userId, table.endpoint, table.createdAt),
 	})
 );
+
+// Aggregated Stats DB
+export const userUsageStats = sqliteTable(
+	'user_usage_stats',
+	{
+		userId: text('user_id').notNull(),
+		endpoint: text('endpoint').notNull(),
+		// 'daily' | 'monthly' | 'total'
+		periodType: text('period_type').notNull(),
+		// 'YYYY-MM-DD' | 'YYYY-MM' | 'total'
+		periodValue: text('period_value').notNull(),
+
+		count: integer('count').notNull().default(0),
+		// Only relevant for live translation (seconds)
+		durationSeconds: integer('duration_seconds').notNull().default(0),
+		// Optional: track total tokens if needed for cost analysis at a glance
+		totalTokens: integer('total_tokens').notNull().default(0),
+		updatedAt: integer('updated_at')
+			.notNull()
+			.default(sql`(strftime('%s', 'now') * 1000)`),
+	},
+	(table) => ({
+		pk: primaryKey({ columns: [table.userId, table.endpoint, table.periodType, table.periodValue] }),
+	})
+);
+
+export const userInitData = sqliteTable('user_init_data', {
+	userId: text('user_id').primaryKey(),
+	sourceLanguage: text('source_language'),
+	targetLanguage: text('target_language'),
+	whyUse: text('why_use'),
+	howToKnown: text('how_to_known'),
+	createdAt: integer('created_at')
+		.notNull()
+		.default(sql`(strftime('%s', 'now') * 1000)`),
+});

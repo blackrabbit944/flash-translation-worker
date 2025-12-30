@@ -1,0 +1,18 @@
+[Live] Decoded binary frame as text, checking for usage...
+[Live] Received usage update (from binary): {"promptTokenCount":530,"responseTokenCount":49,"totalTokenCount":579,"promptTokensDetails":[{"modality":"TEXT","tokenCount":529},{"modality":"AUDIO","tokenCount":1}],"responseTokensDetails":[{"modality":"AUDIO","tokenCount":49}],"thoughtsTokenCount":39}
+[Live] Decoded binary frame as text, checking for usage...
+[Live] Received usage update (from binary): {"promptTokenCount":642,"responseTokenCount":47,"totalTokenCount":689,"promptTokensDetails":[{"modality":"TEXT","tokenCount":638},{"modality":"AUDIO","tokenCount":4}],"responseTokensDetails":[{"modality":"AUDIO","tokenCount":47}],"thoughtsTokenCount":107}
+[Live] Decoded binary frame as text, checking for usage...
+[Live] Received usage update (from binary): {"promptTokenCount":803,"responseTokenCount":99,"totalTokenCount":902,"promptTokensDetails":[{"modality":"TEXT","tokenCount":797},{"modality":"AUDIO","tokenCount":6}],"responseTokensDetails":[{"modality":"AUDIO","tokenCount":99}],"thoughtsTokenCount":31}
+[Live] Decoded binary frame as text, checking for usage...
+[Live] Received usage update (from binary): {"promptTokenCount":968,"responseTokenCount":26,"totalTokenCount":994,"promptTokensDetails":[{"modality":"TEXT","tokenCount":953},{"modality":"AUDIO","tokenCount":15}],"responseTokensDetails":[{"modality":"AUDIO","tokenCount":26}],"thoughtsTokenCount":21}
+[Live] Decoded binary frame as text, checking for usage...
+[Live] Received usage update (from binary): {"promptTokenCount":1035,"responseTokenCount":26,"totalTokenCount":1061,"promptTokensDetails":[{"modality":"TEXT","tokenCount":1018},{"modality":"AUDIO","tokenCount":17}],"responseTokensDetails":[{"modality":"AUDIO","tokenCount":26}],"thoughtsTokenCount":56}
+[Live] Connection closing. Source: close
+[Live] Checking usage metadata before logging: {"promptTokenCount":1035,"responseTokenCount":26,"totalTokenCount":1061,"promptTokensDetails":[{"modality":"TEXT","tokenCount":1018},{"modality":"AUDIO","tokenCount":17}],"responseTokensDetails":[{"modality":"AUDIO","tokenCount":26}],"thoughtsTokenCount":56}
+--- Session Usage Summary ---
+Total Usage Updates Received: 5
+Duration: 39s
+Last Usage Metadata: {"promptTokenCount":1035,"responseTokenCount":26,"totalTokenCount":1061,"promptTokensDetails":[{"modality":"TEXT","tokenCount":1018},{"modality":"AUDIO","tokenCount":17}],"responseTokensDetails":[{"modality":"AUDIO","tokenCount":26}],"thoughtsTokenCount":56}
+Accumulated (Sum) Prompt Tokens: 3978
+Accumulated (Sum) Response Tokens: 247

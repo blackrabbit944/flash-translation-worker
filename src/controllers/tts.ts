@@ -1,8 +1,10 @@
 import { IRequest } from 'itty-router';
 import { AuthenticatedRequest, withAuth } from '../middleware/auth';
 import { logTts, findTtsLogByHash, findLatestTtsLogByTextHash } from '../models/tts';
-import { PRICING_PER_1M_LIVE } from '../config/pricing';
+import { logUsage } from '../models/usage';
+import { PRICING_PER_1M } from '../config/pricing';
 import { normalizeLanguageTag } from '../utils/languages';
+import { calculateCost } from '../utils/cost';
 
 async function calculateHash(text: string): Promise<string> {
 	const msgUint8 = new TextEncoder().encode(text);
@@ -186,18 +188,10 @@ Text to speak: "${text}"
 
 		// Calculate Usage & Cost
 		const usage = data.usageMetadata || {};
-		const inputTokens = usage.promptTokenCount || 0;
-		const outputTokens = (usage.candidatesTokenCount || 0) + (usage.thoughtsTokenCount || 0);
 
-		const pricing = PRICING_PER_1M_LIVE[modelNameShort];
-		let cost = 0;
-		if (pricing) {
-			// Simplified: TTS model usually charges for text input and audio output.
-			// Usage details might separate them but promptTokenCount is generally text for this endpoint?
-			// The user prompt adds some tokens.
-			// Let's rely on total input/output for now.
-			cost = (inputTokens / 1_000_000) * pricing.text_input + (outputTokens / 1_000_000) * pricing.audio_output;
-		}
+		console.log('TTS Usage Metadata:', usage);
+
+		const result = calculateCost(modelNameShort, usage, PRICING_PER_1M);
 
 		// Store in R2
 		const fileId = crypto.randomUUID();
@@ -231,22 +225,25 @@ Text to speak: "${text}"
 		}
 
 		// Log DB
-		await logTts(env.words_db, {
-			userId: authReq.userId,
-			inputTokens,
-			outputTokens,
-			text,
-			costMicros: Math.round(cost * 1_000_000), // Convert to micros? Pricing is usually per 1M.
-			// Wait, cost variable above is "per 1M" pricing applied?
-			// inputTokens / 1M * price.
-			// If price is $0.5 per 1M, then cost result is in dollars.
-			// costMicros = cost * 1_000_000.
-			textHash: await calculateHash(text),
-			voiceName,
-			modelName: modelNameShort,
-			languageCode,
-			url: storedUrl,
-		});
+		ctx.waitUntil(
+			Promise.all([
+				logTts(env.words_db, {
+					userId: authReq.userId,
+					inputTokens: result.input.total,
+					outputTokens: result.output.total,
+					text,
+					costMicros: result.cost,
+					textHash: await calculateHash(text),
+					voiceName,
+					modelName: modelNameShort,
+					languageCode,
+					url: storedUrl,
+				}).catch((err) => console.error('LogTts Error', err)),
+				logUsage(env.logs_db, authReq.userId, modelNameShort, result.input.total, result.output.total, result.cost, 'tts').catch((err) =>
+					console.error('LogUsage TTS Error', err)
+				),
+			])
+		);
 
 		let audioUrl;
 		if (env.ENVIRONMENT === 'production') {

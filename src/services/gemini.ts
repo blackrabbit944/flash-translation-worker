@@ -5,6 +5,7 @@ import { logUsage } from '../models/usage';
 import { eq, and } from 'drizzle-orm';
 
 import { PRICING_PER_1M } from '../config/pricing';
+import { calculateCost } from '../utils/cost';
 
 const GATEWAY_CONFIG = {
 	ACCOUNT_ID: 'd3c42400d063e65d9a797c7d4dba04e4',
@@ -214,7 +215,9 @@ export class GeminiService {
 
 		// Construct Prompt based on User's request
 		let finalPrompt = `Analyze the image and extract the text.
-Then, translate the extracted text from ${sourceLangName} to ${targetLangName}.
+Then.
+
+请你考虑语言背景，进行翻译。用户的母语是 ${sourceLangName} ,目前用户希望翻译的语言是 ${targetLangName}
 
 Output the result in **Markdown** format.
 - You can output what the original text is, and what the translation is, to make it easier for the user to understand and compare.
@@ -222,7 +225,8 @@ Output the result in **Markdown** format.
 - **Do NOT use code blocks (\`\`\`) for normal text.** content should be standard text.
 - Just output the translated text directly.
 
-The user's mother tongue is ${targetLangName}. Therefore, your output should be in ${targetLangName}, except for the original text part which should be in ${sourceLangName}.`;
+所以请你用的所有的解释性的文字都要用用户的母语来说.
+`;
 
 		if (promptUser && promptUser.trim() !== '') {
 			finalPrompt += `\n\nUser Requirement: ${promptUser}`;
@@ -354,13 +358,14 @@ The user's mother tongue is ${targetLangName}. Therefore, your output should be 
 			} finally {
 				await writer.close();
 				// Save to DB (Fire and Forget)
+				// Save to DB (Fire and Forget)
 				if (usageMetadata.promptTokenCount > 0) {
-					const prices = PRICING_PER_1M['gemini-3-flash-preview'];
-					const inputTokens = usageMetadata.promptTokenCount;
-					const outputTokens = usageMetadata.candidatesTokenCount + (usageMetadata.thoughtsTokenCount || 0);
-					const cost = Math.ceil(inputTokens * prices.input + outputTokens * prices.output);
+					console.log('translate usageMetadata', usageMetadata);
+					const result = calculateCost(modelName, usageMetadata, PRICING_PER_1M);
+					const inputTokens = result.input.total;
+					const outputTokens = result.output.total;
 
-					await logUsage(env.logs_db, userId, modelName, inputTokens, outputTokens, cost, endpoint, requestHash);
+					await logUsage(env.logs_db, userId, modelName, inputTokens, outputTokens, result.cost, endpoint, requestHash);
 				}
 
 				if (onComplete) {
@@ -378,5 +383,119 @@ The user's mother tongue is ${targetLangName}. Therefore, your output should be 
 				Connection: 'keep-alive',
 			},
 		});
+	}
+	async recognizeIntent(
+		env: Env,
+		userId: string,
+		audioBase64: string,
+		sourceLang: string,
+		targetLang: string,
+		sourceLangName: string,
+		targetLangName: string
+	): Promise<string | null> {
+		const apiKey = env.GEMINI_API_KEY;
+		const modelName = 'gemini-2.5-flash';
+
+		const urlString = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`;
+
+		const prompt = `
+            Process the audio file and extract the user's intent content.
+            
+            Current Context:
+            - User's native language is likely: ${sourceLangName}
+            - User's wanna to translate language is: ${targetLangName}
+            
+            Scenario: The user is using a Translation App. They will speak a sentence that they want to TRANSLATE.
+            
+            Your job is to extract the **exact text** the user wants to translate.
+            
+            Examples:
+            User audio: "How do you say 'Hello' in Japanese?"
+            Output: "Hello"
+            
+            User audio: "Translate 'Where is the bathroom' to Chinese."
+            Output: "Where is the bathroom"
+            
+            User audio: "Apple"
+            Output: "Apple"
+            
+            User audio: "你好" (Just the content)
+            Output: "你好"
+            
+            User audio: "Please translate this sentence: It is a beautiful day today."
+            Output: "It is a beautiful day today."
+            
+            **Critical Instruction:**
+            - Ignore all translation-related command phrases, questions, or polite wrappers in ANY language (e.g., "Translate...", "How do you say...", "...怎么说", "...totte nani?", "...번역해줘").
+            - Ignore language-related phrasing. For example, if the input is 'How do you say Hello in Japanese', we strictly want 'Hello'."
+            - Handle both prefix commands (e.g., "Translate apple") and suffix commands (e.g., "Apple in Japanese please").
+            - Extract ONLY the core content the user intends to translate.
+            - Provide the output as a simple JSON object: { "content": "THE_EXTRACTED_TEXT" }
+            - Do NOT return markdown code blocks.
+            `;
+
+		const body = {
+			contents: [
+				{
+					parts: [
+						{
+							inline_data: {
+								mime_type: 'audio/wav',
+								data: audioBase64,
+							},
+						},
+						{ text: prompt },
+					],
+				},
+			],
+			generationConfig: {
+				response_mime_type: 'application/json',
+			},
+		};
+
+		const response = await fetch(urlString, {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify(body),
+		});
+
+		if (!response.ok) {
+			const errText = await response.text();
+			console.error('Gemini Intent Recognition Error:', response.status, errText);
+			return null;
+		}
+
+		const json: any = await response.json();
+
+		// Log Usage
+		if (json.usageMetadata) {
+			console.log('Gemini Intent Recognition Usage Metadata:', json.usageMetadata);
+
+			const result = calculateCost(modelName, json.usageMetadata, PRICING_PER_1M);
+
+			// Log to DB (Fire and Forget)
+			// Using logic similar to other methods
+			logUsage(env.logs_db, userId, modelName, result.input.total, result.output.total, result.cost, 'intent_recognition').catch((err) =>
+				console.error('Failed to log usage', err)
+			);
+		}
+
+		// Parse Response
+		try {
+			const candidate = json.candidates?.[0];
+			const contentParts = candidate?.content?.parts;
+			const textPart = contentParts?.[0]?.text;
+
+			if (textPart) {
+				const resultObj = JSON.parse(textPart);
+				if (resultObj.content) {
+					console.log(`[Intent] Recognized: ${resultObj.content}`);
+					return resultObj.content;
+				}
+			}
+		} catch (e) {
+			console.error('[Intent] Failed to parse response json', e);
+		}
+		return null;
 	}
 }

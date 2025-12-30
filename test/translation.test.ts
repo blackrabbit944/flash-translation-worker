@@ -89,23 +89,11 @@ describe('Text Translation API', () => {
 
 	it('enforces rate limits (free tier default)', async () => {
 		// Seed logs to exceed limit (5)
-		const db = createDb(env.logs_db);
+		const { logUsage } = await import('../src/models/usage');
 		const limit = 5;
 
 		for (let i = 0; i < limit; i++) {
-			await db
-				.insert(usageLogs)
-				.values({
-					id: `log_${i}`,
-					userId: userId,
-					endpoint: 'text_translation',
-					model: 'test',
-					inputTokens: 10,
-					outputTokens: 10,
-					costMicros: 100,
-					createdAt: Date.now(),
-				})
-				.execute();
+			await logUsage(env.logs_db, userId, 'test', 10, 10, 100, 'text_translation');
 		}
 
 		// Now request should fail
@@ -137,8 +125,14 @@ describe('Text Translation API', () => {
 
 		const db = createDb(env.logs_db);
 		const limit = 10;
-		const twoMonthsAgo = Date.now() - 60 * 24 * 60 * 60 * 1000;
+		// We need to simulate usage that counts towards TOTAL but isn't from today
+		// (so we don't hit daily limits first, if daily limit < total limit).
+		// We do this by manually inserting into userUsageStats with 'total' type.
 
+		const { userUsageStats } = await import('../src/db/schema');
+
+		// Insert detailed logs (audit) - optional for limit check but good for consistency
+		const twoMonthsAgo = Date.now() - 60 * 24 * 60 * 60 * 1000;
 		for (let i = 0; i < limit; i++) {
 			await db
 				.insert(usageLogs)
@@ -154,6 +148,20 @@ describe('Text Translation API', () => {
 				})
 				.execute();
 		}
+
+		// Insert Aggregated Stats (Total)
+		await db
+			.insert(userUsageStats)
+			.values({
+				userId: totalUserId,
+				endpoint: 'text_translation',
+				periodType: 'total',
+				periodValue: 'total',
+				count: limit,
+				durationSeconds: 0,
+				totalTokens: limit * 20,
+			})
+			.execute();
 
 		const request = new IncomingRequest('http://example.com/translation/text', {
 			method: 'POST',
@@ -177,8 +185,11 @@ describe('Text Translation API', () => {
 
 		const db = createDb(env.logs_db);
 		const limit = 3; // FREE tier image limit is 3
-		const twoMonthsAgo = Date.now() - 60 * 24 * 60 * 60 * 1000;
 
+		const { userUsageStats } = await import('../src/db/schema');
+
+		// Insert Detailed Logs (Audit) - from 2 months ago
+		const twoMonthsAgo = Date.now() - 60 * 24 * 60 * 60 * 1000;
 		for (let i = 0; i < limit; i++) {
 			await db
 				.insert(usageLogs)
@@ -194,6 +205,20 @@ describe('Text Translation API', () => {
 				})
 				.execute();
 		}
+
+		// Insert Aggregated Stats (Total)
+		await db
+			.insert(userUsageStats)
+			.values({
+				userId: totalUserId,
+				endpoint: 'image_translation',
+				periodType: 'total',
+				periodValue: 'total',
+				count: limit,
+				durationSeconds: 0,
+				totalTokens: limit * 20,
+			})
+			.execute();
 
 		const request = new IncomingRequest('http://example.com/translation/image', {
 			method: 'POST',

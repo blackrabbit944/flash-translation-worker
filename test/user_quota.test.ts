@@ -25,21 +25,9 @@ describe('User Quota API', () => {
 	});
 
 	it('returns correct quota structure for FREE user', async () => {
-		//Seed usage
-		const db = createDb(env.logs_db);
-		await db
-			.insert(usageLogs)
-			.values({
-				id: 'quota_log_1',
-				userId: userId,
-				endpoint: 'text_translation',
-				model: 'test',
-				inputTokens: 10,
-				outputTokens: 10,
-				costMicros: 100,
-				createdAt: Date.now(),
-			})
-			.execute();
+		//Seed usage via logUsage to ensure stats are updated
+		const { logUsage } = await import('../src/models/usage');
+		await logUsage(env.logs_db, userId, 'test', 10, 10, 100, 'text_translation');
 
 		const request = new IncomingRequest('http://example.com/user/quota', {
 			method: 'GET',
@@ -56,7 +44,7 @@ describe('User Quota API', () => {
 		expect(body.tier).toBe('FREE');
 		expect(body.quotas).toBeDefined();
 
-		// Text Translation (Free limit 3 daily)
+		// Text Translation (Free limit 300 daily)
 		const textQuota = body.quotas.text_translation;
 		expect(textQuota).toBeDefined();
 		expect(textQuota.daily.limit).toBe(3);

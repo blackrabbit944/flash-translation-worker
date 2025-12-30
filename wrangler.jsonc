@@ -13,20 +13,20 @@
 	"d1_databases": [
 		{
 			"binding": "users_db",
-			"database_name": "users-db",
-			"database_id": "users-db-id-placeholder",
+			"database_name": "flash_users_db",
+			"database_id": "444474e4-dd54-437c-a229-8a60cdbdcc51",
 			"migrations_dir": "migrations/users"
 		},
 		{
 			"binding": "words_db",
-			"database_name": "words-db",
-			"database_id": "words-db-id-placeholder",
+			"database_name": "flash_words_db",
+			"database_id": "233d14f8-76c0-48a8-88c0-72dd6bf0f991",
 			"migrations_dir": "migrations/words"
 		},
 		{
 			"binding": "logs_db",
-			"database_name": "logs-db",
-			"database_id": "logs-db-id-placeholder",
+			"database_name": "flash_logs_db",
+			"database_id": "04669dd8-3cc9-4dc6-b852-82e4412ff9f4",
 			"migrations_dir": "migrations/usage_logs"
 		}
 	],

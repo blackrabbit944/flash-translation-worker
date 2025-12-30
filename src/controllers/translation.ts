@@ -8,6 +8,7 @@ const geminiService = new GeminiService();
 
 import { logUsage } from '../models/usage';
 import { PRICING_PER_1M, PRICING_PER_1M_LIVE } from '../config/pricing';
+import { aggregateUsage, calculateCostFromBreakdown } from '../utils/cost';
 
 function isValidLanguageCode(code: string): boolean {
 	try {
@@ -67,16 +68,16 @@ export async function handleTranslation(request: IRequest, env: Env, ctx: Execut
 
 	// 3. System Prompt
 	const systemPrompt = `
-你是专业的双向实时语音翻译员。
-你将听到 ${sourceLangName} 或 ${targetLangName} 的语音。
-你必须检测语言并将其翻译成另一种语言（${sourceLangName} -> ${targetLangName} 或 ${targetLangName} -> ${sourceLangName}）。
-仅输出翻译后的文本和音频。不要回复对话性文本，只提供翻译。
+    你是专业的双向实时语音翻译员。
+    你将听到 ${sourceLangName} 或 ${targetLangName} 的语音。
+    你必须检测语言并将其翻译成另一种语言（${sourceLangName} -> ${targetLangName} 或 ${targetLangName} -> ${sourceLangName}）。
+    仅输出翻译后的文本和音频。不要回复对话性文本，只提供翻译。
 
-1.因此请你根据前后文进行翻译。
-2.你听到的两种语言分别是2个不同身份的人在说话,所以你要理解这两个人的关系进行翻译.
-3.如果说A语言,一定要翻译成B语言,无论说什么都不要理解回复,而是直接翻译.
-4.如果说B语言,一定要翻译成A语言,无论说什么都不要理解回复,而是直接翻译.
-`;
+    1.因此请你根据前后文进行翻译。
+    2.你听到的两种语言分别是2个不同身份的人在说话,所以你要理解这两个人的关系进行翻译.
+    3.如果说A语言,一定要翻译成B语言,无论说什么都不要理解回复,而是直接翻译.
+    4.如果说B语言,一定要翻译成A语言,无论说什么都不要理解回复,而是直接翻译.
+    `;
 
 	const modelNameShort = 'gemini-2.5-flash-native-audio-preview-12-2025'; // Key for pricing
 	const modelVersion = `models/${modelNameShort}`; // Full model string for API
@@ -120,8 +121,15 @@ export async function handleTranslation(request: IRequest, env: Env, ctx: Execut
 	try {
 		console.log(`[Live] API Key used: ${env.GEMINI_API_KEY}`);
 		console.log(`[Live] Connecting to Gemini: ${targetUrl.replace(env.GEMINI_API_KEY, '***')}`);
+
+		const proxyHeaders = new Headers(request.headers);
+
+		// 2. 剔除会导致 Google 混淆的鉴权头
+		proxyHeaders.delete('Authorization');
+		proxyHeaders.delete('Host'); // 最好也把 Host 删掉，让 fetch 自动生成
+
 		const response = await fetch(targetUrl, {
-			headers: request.headers,
+			headers: proxyHeaders,
 			// @ts-ignore
 			webSocket: true,
 		});
@@ -184,6 +192,8 @@ export async function handleTranslation(request: IRequest, env: Env, ctx: Execut
 				},
 			],
 		};
+		// Store all usage events for final logging
+		const allUsageEvents: any[] = [];
 
 		// 8. Forwarding & Interception
 		worker.addEventListener('message', (event) => {
@@ -204,16 +214,44 @@ export async function handleTranslation(request: IRequest, env: Env, ctx: Execut
 
 		serverWebSocket.addEventListener('message', (event) => {
 			const data = event.data;
+
 			if (typeof data === 'string') {
 				try {
 					const json = JSON.parse(data);
+
+					// Debug: Log all keys in the message to see what we are getting
+					// console.log('[Live] Message Keys:', Object.keys(json));
+
 					// Extract Usage
 					if (json.usageMetadata) {
+						console.log('[Live] Received usage update:', JSON.stringify(json.usageMetadata));
 						usageMetadata = json.usageMetadata;
+						allUsageEvents.push(json.usageMetadata);
 					}
 					// Also check nested? Gemini docs vary.
 					// Usually top level BidiGenerateContentResponse has usageMetadata.
 				} catch (e) {}
+			} else {
+				// Binary data (audio) or potentially JSON-as-Binary
+				try {
+					// Fallback: Gemini sometimes sends JSON messages as binary frames (ArrayBuffer)
+					// Try to decode and parse
+					if (data instanceof ArrayBuffer) {
+						const text = new TextDecoder().decode(data);
+						if (text.startsWith('{') && text.includes('usageMetadata')) {
+							console.log('[Live] Decoded binary frame as text, checking for usage...');
+							const json = JSON.parse(text);
+							if (json.usageMetadata) {
+								console.log('[Live] Received usage update (from binary):', JSON.stringify(json.usageMetadata));
+								usageMetadata = json.usageMetadata;
+								allUsageEvents.push(json.usageMetadata);
+							}
+						}
+					}
+				} catch (e) {
+					// Not JSON or decoding failed, treat as normal audio binary
+				}
+				// console.log('[debug]mesage中二进制的data', data);
 			}
 			worker.send(data);
 		});
@@ -240,61 +278,52 @@ export async function handleTranslation(request: IRequest, env: Env, ctx: Execut
 			} catch {}
 
 			// Log Usage
-			if (usageMetadata.promptTokenCount > 0 || usageMetadata.candidatesTokenCount > 0 || usageMetadata.totalTokenCount > 0) {
-				const pricing = PRICING_PER_1M_LIVE[modelNameShort];
-				let cost = 0;
+			// Log Usage
+			const compiledUsage = aggregateUsage(allUsageEvents);
+			console.log(`[Live] Aggregated Usage:`, JSON.stringify(compiledUsage));
 
-				if (pricing) {
-					// Detailed calculation
-					let text_input_tokens = 0;
-					let text_output_tokens = 0;
-					let audio_input_tokens = 0;
-					let audio_output_tokens = 0;
+			if (compiledUsage.input.total > 0 || compiledUsage.output.total > 0) {
+				const cost = calculateCostFromBreakdown(modelNameShort, compiledUsage, PRICING_PER_1M_LIVE);
 
-					const inputTokens = usageMetadata.promptTokensDetails.reduce((acc, detail) => {
-						if (detail.modality === 'TEXT') {
-							text_input_tokens += detail.tokenCount;
-						} else if (detail.modality === 'AUDIO') {
-							audio_input_tokens += detail.tokenCount;
-						}
-						return acc;
-					}, 0);
-
-					const outputTokens = usageMetadata.responseTokensDetails.reduce((acc, detail) => {
-						if (detail.modality === 'TEXT') {
-							text_output_tokens += detail.tokenCount;
-						} else if (detail.modality === 'AUDIO') {
-							audio_output_tokens += detail.tokenCount;
-						}
-						return acc;
-					}, 0);
-
-					const totalTokens = inputTokens + outputTokens;
-
-					cost =
-						pricing['audio_input'] * audio_input_tokens +
-						pricing['audio_output'] * audio_output_tokens +
-						pricing['text_input'] * text_input_tokens +
-						pricing['text_output'] * text_output_tokens;
+				if (cost > 0) {
+					const audio_input_tokens = compiledUsage.input.audio;
+					const audio_output_tokens = compiledUsage.output.audio;
 
 					// Use 'live_translation' as endpoint
 					const endTime = Date.now();
 					const durationSeconds = Math.ceil((endTime - startTime) / 1000);
+
+					// Detailed Accumulation Logging
+					console.log('--- Session Usage Summary ---');
+					console.log(`Total Usage Updates Received: ${allUsageEvents.length}`);
+					console.log(`Duration: ${durationSeconds}s`);
+					console.log(`Aggregated Breakdown:`, JSON.stringify(compiledUsage, null, 2));
+
+					console.log(`Accumulated (Sum) Prompt Tokens: ${compiledUsage.input.total}`);
+					console.log(`Accumulated (Sum) Response Tokens: ${compiledUsage.output.total}`);
+					console.log('--- End Summary ---');
+
 					console.log(`[Live] Usage logged. Duration: ${durationSeconds}s, Cost: ${cost} micros`);
-					await logUsage(
-						env.logs_db,
-						authReq.userId,
-						modelNameShort,
-						audio_input_tokens,
-						audio_output_tokens,
-						cost,
-						'live_translation',
-						undefined,
-						durationSeconds
+
+					// Critical: Wrap async DB write in ctx.waitUntil
+					ctx.waitUntil(
+						logUsage(
+							env.logs_db,
+							authReq.userId,
+							modelNameShort,
+							audio_input_tokens,
+							audio_output_tokens,
+							cost,
+							'live_translation',
+							undefined,
+							durationSeconds
+						).catch((err) => console.error('[Live] Failed to log usage:', err))
 					);
 				} else {
 					// Fallback to standard Text Pricing if model not in MultiModal config found (unlikely)
 				}
+			} else {
+				console.log('[Live] No usage to log (Token usage is 0). This usually means failure before any content generation.');
 			}
 		};
 
@@ -463,5 +492,64 @@ export async function handleImageTranslation(request: IRequest, env: Env, ctx: E
 	} catch (error: any) {
 		console.error('Image Translation Error:', error);
 		return new Response(`Image Translation failed: ${error.message}`, { status: 500 });
+	}
+}
+
+export async function handleRecognition(request: IRequest, env: Env, ctx: ExecutionContext) {
+	const authReq = request as AuthenticatedRequest;
+
+	if (!authReq.userId) {
+		return new Response('Unauthorized', { status: 401 });
+	}
+
+	let body;
+	try {
+		body = (await request.json()) as any;
+	} catch (e) {
+		return new Response('Invalid JSON', { status: 400 });
+	}
+
+	// Input: audio (base64), source_language, target_language
+	const audioBase64 = body.audio;
+	let sourceLangCode = body.source_language || body.source_lang;
+	let targetLangCode = body.target_language || body.target_lang;
+
+	if (sourceLangCode) sourceLangCode = normalizeLanguageTag(sourceLangCode);
+	if (targetLangCode) targetLangCode = normalizeLanguageTag(targetLangCode);
+
+	if (!audioBase64 || !sourceLangCode || !targetLangCode) {
+		return new Response('Missing required fields: audio, source_language, target_language', { status: 400 });
+	}
+
+	if (!isValidLanguageCode(sourceLangCode) || !isValidLanguageCode(targetLangCode)) {
+		return new Response('Invalid language code', { status: 400 });
+	}
+
+	const sourceLangName = getLanguageName(sourceLangCode);
+	const targetLangName = getLanguageName(targetLangCode);
+
+	try {
+		console.log(`[Recognition] User ${authReq.userId} requested intent recognition.`);
+		const recognizedText = await geminiService.recognizeIntent(
+			env,
+			authReq.userId,
+			audioBase64,
+			sourceLangCode,
+			targetLangCode,
+			sourceLangName,
+			targetLangName
+		);
+
+		if (!recognizedText) {
+			return new Response('Failed to recognize intent', { status: 500 });
+		}
+
+		// Return simple JSON
+		return new Response(JSON.stringify({ content: recognizedText }), {
+			headers: { 'Content-Type': 'application/json' },
+		});
+	} catch (error: any) {
+		console.error('Recognition Error:', error);
+		return new Response(`Recognition failed: ${error.message}`, { status: 500 });
 	}
 }
