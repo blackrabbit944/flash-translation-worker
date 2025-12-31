@@ -84,7 +84,7 @@ export async function handleGetQuota(request: IRequest, env: Env, ctx: Execution
 		JSON.stringify({
 			tier: tier,
 			membership_expire_at: expirationTimestamp,
-			is_trial_cancelled: isTrialCancelled || true,
+			is_trial_cancelled: isTrialCancelled,
 			quotas: quotas,
 		}),
 		{
