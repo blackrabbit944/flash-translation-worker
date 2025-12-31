@@ -10,7 +10,9 @@ export async function upsertUserEntitlement(
 	entitlementId: string,
 	expiresAt: number | null,
 	status: string,
-	originalAppUserId?: string
+	originalAppUserId?: string,
+	isTrial: boolean = false,
+	autoRenew: boolean = true
 ): Promise<void> {
 	const db = createDb(d1);
 	await db
@@ -22,6 +24,8 @@ export async function upsertUserEntitlement(
 			status,
 			updatedAt: Date.now(),
 			originalAppUserId,
+			isTrial: isTrial ? 1 : 0,
+			autoRenew: autoRenew ? 1 : 0,
 		})
 		.onConflictDoUpdate({
 			target: [userEntitlements.userId, userEntitlements.entitlementId],
@@ -30,6 +34,8 @@ export async function upsertUserEntitlement(
 				status: sql`excluded.status`,
 				updatedAt: sql`excluded.updated_at`,
 				originalAppUserId: sql`excluded.original_app_user_id`,
+				isTrial: sql`excluded.is_trial`,
+				autoRenew: sql`excluded.auto_renew`,
 			},
 		})
 		.execute();

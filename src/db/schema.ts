@@ -20,6 +20,8 @@ export const userEntitlements = sqliteTable(
 		updatedAt: integer('updated_at')
 			.notNull()
 			.default(sql`(strftime('%s', 'now') * 1000)`),
+		isTrial: integer('is_trial').default(0),
+		autoRenew: integer('auto_renew').default(1),
 	},
 	(table) => ({
 		pk: primaryKey({ columns: [table.userId, table.entitlementId] }),
@@ -49,6 +51,7 @@ export const ttsLogs = sqliteTable('tts_logs', {
 	textHash: text('text_hash').notNull(),
 	voiceName: text('voice_name').notNull(),
 	modelName: text('model_name').notNull(),
+	status: text('status').default('completed'),
 	languageCode: text('language_code'),
 	url: text('url'),
 	createdAt: integer('created_at')

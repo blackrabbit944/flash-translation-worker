@@ -1,6 +1,13 @@
 import { IRequest } from 'itty-router';
 import { AuthenticatedRequest, withAuth } from '../middleware/auth';
-import { logTts, findTtsLogByHash, findLatestTtsLogByTextHash } from '../models/tts';
+import {
+	logTts,
+	findTtsLogByHash,
+	findLatestTtsLogByTextHash,
+	findTtsRequest,
+	createPendingTtsLog,
+	updateTtsLogStatus,
+} from '../models/tts';
 import { logUsage } from '../models/usage';
 import { PRICING_PER_1M } from '../config/pricing';
 import { normalizeLanguageTag } from '../utils/languages';
@@ -308,5 +315,200 @@ function createWavHeader(dataLength: number, sampleRate: number, numChannels: nu
 function writeString(view: DataView, offset: number, string: string) {
 	for (let i = 0; i < string.length; i++) {
 		view.setUint8(offset + i, string.charCodeAt(i));
+	}
+}
+
+export async function handleTts2(request: IRequest, env: Env, ctx: ExecutionContext) {
+	// 1. Auth & Input Handling
+	// Parse body first to check parameters
+	let body;
+	try {
+		body = (await request.clone().json()) as any;
+	} catch (e) {
+		return new Response('Invalid JSON', { status: 400 });
+	}
+
+	let { text, voiceName = 'Kore', languageCode } = body;
+	if (languageCode) {
+		languageCode = normalizeLanguageTag(languageCode);
+	}
+	if (!text) {
+		return new Response('Missing required fields', { status: 400 });
+	}
+	if (voiceName !== 'Kore') {
+		return new Response('Only "Kore" voice is supported currently', { status: 400 });
+	}
+
+	const modelNameShort = 'gemini-2.5-flash-preview-tts';
+	const textHash = await calculateHash(text); // calculateHash is in scope
+
+	// 2. Check DB Status
+	// Need to import findTtsRequest from models/tts
+	const existingLog = await findTtsRequest(env.words_db, textHash, voiceName, modelNameShort, languageCode);
+
+	if (existingLog) {
+		// Scenario A: Completed -> Return URL
+		if (existingLog.status === 'completed' && existingLog.url) {
+			let audioUrl;
+			if (env.ENVIRONMENT === 'production') {
+				const key = existingLog.url.startsWith('r2://') ? existingLog.url.substring(5) : existingLog.url;
+				audioUrl = `${env.R2_PUBLIC_DOMAIN}/${key}`;
+			} else {
+				audioUrl = `https://kiwi-api-local.jianda.com/tts/preview?hash=${textHash}`;
+				// Fallback for dev if no valid public domain
+			}
+			return new Response(JSON.stringify({ audio_url: audioUrl }), {
+				headers: { 'Content-Type': 'application/json' },
+				status: 200,
+			});
+		}
+
+		// Scenario B: Processing -> Return 202
+		if (existingLog.status === 'processing' || (existingLog.status === 'completed' && !existingLog.url)) {
+			return new Response(JSON.stringify({ status: 'processing', message: 'Generating audio, please wait.' }), {
+				status: 202,
+				headers: { 'Content-Type': 'application/json' },
+			});
+		}
+		// If failed, proceed to retry (Scenario C)
+	}
+
+	// Scenario C: New Request
+	// Auth Check
+	const authResponse = await withAuth(request, env, ctx);
+	if (authResponse) {
+		return authResponse;
+	}
+	const authReq = request as AuthenticatedRequest;
+	if (!authReq.userId) return new Response('Unauthorized', { status: 401 });
+
+	// Insert Pending Log
+	// Need to import createPendingTtsLog, updateTtsLogStatus
+	await createPendingTtsLog(env.words_db, {
+		userId: authReq.userId,
+		text,
+		textHash,
+		voiceName,
+		modelName: modelNameShort,
+		languageCode,
+	});
+
+	// Call Gemini
+	const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelNameShort}:generateContent?key=${env.GEMINI_API_KEY}`;
+	const prompt = `
+Please generate speech for the following text.
+The text is expected to be in language code: "${languageCode || 'unknown'}".
+However, this language code is only a reference. If the text appears to be in a different language, please ignore the reference and speak in the detected language.
+Text to speak: "${text}"
+`;
+
+	const payload = {
+		contents: [{ parts: [{ text: prompt }] }],
+		generationConfig: {
+			responseModalities: ['AUDIO'],
+			speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: voiceName } } },
+		},
+	};
+
+	try {
+		const response = await fetch(url, {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify(payload),
+		});
+
+		if (!response.ok) {
+			const errorText = await response.text();
+			// Update DB to failed
+			await updateTtsLogStatus(env.words_db, textHash, {
+				status: 'failed',
+				inputTokens: 0,
+				outputTokens: 0,
+				costMicros: 0,
+			});
+			return new Response(`Gemini API Error: ${response.status} ${errorText}`, { status: response.status });
+		}
+
+		const data = (await response.json()) as any;
+		const candidate = data.candidates?.[0];
+		const part = candidate?.content?.parts?.[0];
+
+		if (!part || !part.inlineData || !part.inlineData.data) {
+			await updateTtsLogStatus(env.words_db, textHash, {
+				status: 'failed',
+				inputTokens: 0,
+				outputTokens: 0,
+				costMicros: 0,
+			});
+			return new Response('No audio generated', { status: 500 });
+		}
+
+		const base64Audio = part.inlineData.data;
+		const binaryString = atob(base64Audio);
+		const len = binaryString.length;
+		const bytes = new Uint8Array(len);
+		for (let i = 0; i < len; i++) {
+			bytes[i] = binaryString.charCodeAt(i);
+		}
+
+		const usage = data.usageMetadata || {};
+		const costResult = calculateCost(modelNameShort, usage, PRICING_PER_1M);
+		const fileId = crypto.randomUUID();
+		const key = `tts/${authReq.userId}/${fileId}.wav`;
+
+		// Create WAV
+		const wavHeader = createWavHeader(bytes.length, 24000, 1, 16);
+		const wavFile = new Uint8Array(wavHeader.length + bytes.length);
+		wavFile.set(wavHeader);
+		wavFile.set(bytes, wavHeader.length);
+
+		// Async Upload & Update
+		const r2Promise = async () => {
+			if (env.TTS_BUCKET) {
+				await env.TTS_BUCKET.put(key, wavFile, {
+					httpMetadata: { contentType: 'audio/wav' },
+				});
+				const storedUrl = `r2://${key}`;
+
+				await updateTtsLogStatus(env.words_db, textHash, {
+					url: storedUrl,
+					status: 'completed',
+					inputTokens: costResult.input.total,
+					outputTokens: costResult.output.total,
+					costMicros: costResult.cost,
+				});
+
+				// Also log usage logs
+				await logUsage(
+					env.logs_db,
+					authReq.userId,
+					modelNameShort,
+					costResult.input.total,
+					costResult.output.total,
+					costResult.cost,
+					'tts'
+				).catch((e) => console.error('LogUsage Error', e));
+			}
+		};
+
+		ctx.waitUntil(r2Promise());
+
+		// Return Stream/Buffer directly
+		// Status 200, Content-Type audio/wav
+		return new Response(wavFile, {
+			status: 200,
+			headers: {
+				'Content-Type': 'audio/wav',
+			},
+		});
+	} catch (e: any) {
+		console.error('TTS2 Error', e);
+		await updateTtsLogStatus(env.words_db, textHash, {
+			status: 'failed',
+			inputTokens: 0,
+			outputTokens: 0,
+			costMicros: 0,
+		});
+		return new Response(`Error: ${e.message}`, { status: 500 });
 	}
 }

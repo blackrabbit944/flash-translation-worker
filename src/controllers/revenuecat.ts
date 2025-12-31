@@ -31,8 +31,34 @@ export async function handleRevenueCatWebhook(request: Request, env: Env): Promi
 				newStatus = 'expired';
 			}
 
+			// Determine if it's a trial and if it's auto-renewing
+			// RevenueCat event payload structure:
+			// event.period_type: "TRIAL" | "NORMAL" | "INTRO"
+			// event.auto_resume_at_ms: (if paused)
+			// we can infer autoRenew from "type" usually being CANCELLATION or expiration reasons.
+			// But clearer is usually checking `event.is_trial_conversion` or similar, but webhooks vary.
+			// Let's rely on `period_type` for trial status.
+			const isTrial = event.period_type === 'TRIAL';
+
+			// Auto Renew Logic:
+			// If event.type == 'CANCELLATION', it means auto-renew is turned off (usually).
+			// If event.type == 'EXPIRATION', it's done.
+			// If event.type == 'RENEWAL' or 'INITIAL_PURCHASE', it's usually on.
+			// However, RevenueCat webhook doesn't explicitly send "auto_renew_status" boolean in the root event object always.
+			// But `event.type` 'CANCELLATION' specifically means "user turned off auto renew".
+			// So if we see CANCELLATION, autoRenew = false.
+			// If we see INITIAL_PURCHASE or RENEWAL, autoRenew = true (default).
+			// If we see EXPIRATION, it doesn't matter much but effectively false.
+			let autoRenew = true;
+			if (event.type === 'CANCELLATION' || event.type === 'EXPIRATION') {
+				autoRenew = false;
+			}
+			// If we want to be sticky, we should check previous state, but upsert overwrites.
+			// The critical case is: User is in TRIAL, and sends CANCELLATION.
+			// resulting: isTrial=true, autoRenew=false. This is our "TRIAL_CANCELLED" state.
+
 			for (const entId of entitlementIds) {
-				await upsertUserEntitlement(env.users_db, targetUserId, entId, expirationAtMs, newStatus, appUserId);
+				await upsertUserEntitlement(env.users_db, targetUserId, entId, expirationAtMs, newStatus, appUserId, isTrial, autoRenew);
 			}
 
 			// Clean up old memberships if this is an upgrade (PRODUCT_CHANGE to UNLIMITED)

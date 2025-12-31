@@ -52,7 +52,15 @@ export async function withAuth(request: IRequest, env: Env, ctx: ExecutionContex
 
 		(request as AuthenticatedRequest).membershipTier = tier;
 
-		// Get Limits
+		// Check for Trial Cancellation state (isTrial=1 AND autoRenew=0)
+		const isTrialCancelled = activeEntitlements.some((e) => e.isTrial === 1 && e.autoRenew === 0);
+
+		if (isTrialCancelled) {
+			tier = 'TRIAL_CANCELLED';
+			(request as AuthenticatedRequest).membershipTier = tier;
+		}
+
+		// Get Limits (now automatic via tier)
 		const limits = TIER_LIMITS[tier][resourceType];
 
 		// Check Rate Limit (Daily and Monthly) + Total if needed

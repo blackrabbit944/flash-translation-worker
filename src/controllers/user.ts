@@ -12,12 +12,21 @@ export async function handleGetQuota(request: IRequest, env: Env, ctx: Execution
 		return new Response('Unauthorized', { status: 401 });
 	}
 
-	const tier = authReq.membershipTier || 'FREE';
+	let tier = authReq.membershipTier || 'FREE';
 	const resourceTypes: ResourceType[] = ['text_translation', 'image_translation', 'live_translation'];
 
 	// Needed for expiration date
 	const entitlements = await getUserEntitlements(env.users_db, authReq.userId);
 	const activeEntitlements = entitlements.filter((e) => e.status === 'active' && (e.expiresAt === null || e.expiresAt > Date.now()));
+
+	// Check for Trial Cancellation state (isTrial=1 AND autoRenew=0)
+	// We check if ANY active entitlement is a cancelled trial.
+	// Usually there is only 1 active main entitlement.
+	const isTrialCancelled = activeEntitlements.some((e) => e.isTrial === 1 && e.autoRenew === 0);
+
+	if (isTrialCancelled) {
+		tier = 'TRIAL_CANCELLED';
+	}
 
 	const quotas: Record<string, any> = {};
 
@@ -75,6 +84,7 @@ export async function handleGetQuota(request: IRequest, env: Env, ctx: Execution
 		JSON.stringify({
 			tier: tier,
 			membership_expire_at: expirationTimestamp,
+			is_trial_cancelled: isTrialCancelled || true,
 			quotas: quotas,
 		}),
 		{

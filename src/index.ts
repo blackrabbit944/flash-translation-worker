@@ -3,7 +3,7 @@ import { handleTranslation } from './controllers/translation';
 import { handleLogin, handleRefresh } from './controllers/auth';
 import { handleRevenueCatWebhook } from './controllers/revenuecat';
 import { handleTextTranslation, handleImageTranslation, handleRecognition } from './controllers/translation';
-import { handleTts, handleTtsPreview } from './controllers/tts';
+import { handleTts, handleTtsPreview, handleTts2 } from './controllers/tts';
 import { handleGetQuota, handleInitData } from './controllers/user';
 import { withAuth } from './middleware/auth';
 
@@ -15,6 +15,8 @@ router.get('/translation/live', withAuth, handleTranslation);
 router.post('/translation/text', (req, env, ctx) => handleTextTranslation(req, env, ctx));
 // @ts-ignore
 router.post('/translation/tts', (req, env, ctx) => handleTts(req, env, ctx));
+// @ts-ignore
+router.post('/translation/tts2', (req, env, ctx) => handleTts2(req, env, ctx));
 // @ts-ignore
 router.post('/translation/image', withAuth, (req, env, ctx) => handleImageTranslation(req, env, ctx));
 // @ts-ignore
