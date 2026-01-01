@@ -6,6 +6,7 @@ import { eq, and } from 'drizzle-orm';
 
 import { PRICING_PER_1M } from '../config/pricing';
 import { calculateCost } from '../utils/cost';
+import { env } from 'cloudflare:workers';
 
 const GATEWAY_CONFIG = {
 	ACCOUNT_ID: 'd3c42400d063e65d9a797c7d4dba04e4',
@@ -119,16 +120,14 @@ export class GeminiService {
         Case 2: Single Sentence
         {
             "type": "sentence",
-            "translation": "Translated sentence",
-            "explanation": "Brief explanation of the sentence meaning",
-            "grammar_analysis": "Explanation of key grammar points used in this sentence"
         }
         
         Case 3: Multiple Sentences
         {
             "type": "multiple_sentences",
-            "translation": "Full translation"
         }
+        
+        Do not output any other fields for Case 2 and Case 3, just the type and an empty translation string.
 
         你所有的回答要用 "${sourceLangName}" 语言回答,因为你面对的用户的母语是: ${sourceLangName}。
         
@@ -191,6 +190,66 @@ export class GeminiService {
 		);
 	}
 
+	async translateLongTextAndStream(
+		env: Env,
+		userId: string,
+		text: string,
+		sourceLang: string,
+		targetLang: string,
+		sourceLangName: string,
+		targetLangName: string,
+		ctx: ExecutionContext
+	): Promise<Response> {
+		// 1. Prepare Gemini Request
+		const apiKey = env.GEMINI_API_KEY;
+		const modelName = 'gemini-3-flash-preview';
+
+		// Use Cloudflare AI Gateway
+		const urlString = getGatewayUrl(modelName, apiKey);
+
+		const prompt = `
+       你是一个专业的翻译员. 用户的母语是 ${sourceLangName} ,他经常需要翻译的语言是 ${targetLangName}.
+              
+       要求:
+       - 理解用户的输入并帮助用户翻译.
+       - 如果内容特别长,就直接翻译并输出给用户
+       - 如果句子只是一两句,我还希望你给用户讲解对应的语法,用用户的母语讲解
+       - 输出可以用markdown文本,来展示更多你想讲的数据
+       - 你要移除“您好,作为一个专业的翻译人员, 我很乐意帮你提供...这些开头的词语“,直接开始讲解你的翻译”
+        
+       用户的输入是:
+       "${text}"
+       `;
+
+		const body = {
+			contents: [{ parts: [{ text: prompt }] }],
+			generationConfig: {
+				response_mime_type: 'text/plain',
+			},
+		};
+
+		const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+		if (env.CLOUDFLARE_GATEWAY_TOKEN) {
+			headers['cf-aig-authorization'] = `Bearer ${env.CLOUDFLARE_GATEWAY_TOKEN}`;
+		}
+
+		const response = await fetch(urlString, {
+			method: 'POST',
+			headers: headers,
+			body: JSON.stringify(body),
+		});
+
+		if (!response.ok) {
+			const errText = await response.text();
+			console.error('Gemini LongText API Error:', response.status, errText);
+			throw new Error(`Gemini API Error: ${response.status}`);
+		}
+
+		// 2. Handle Stream & Logging via Helper
+		// We use 'text_translation' as endpoint to share quota with normal text translation
+		return this.handleStreamResponse(response, env, ctx, userId, modelName, 'text_translation', undefined);
+	}
+
 	async translateImageAndStream(
 		env: Env,
 		userId: string,
@@ -215,18 +274,18 @@ export class GeminiService {
 
 		// Construct Prompt based on User's request
 		let finalPrompt = `Analyze the image and extract the text.
-Then.
+            Then.
 
-请你考虑语言背景，进行翻译。用户的母语是 ${sourceLangName} ,目前用户希望翻译的语言是 ${targetLangName}
+            请你考虑语言背景，进行翻译。用户的母语是 ${sourceLangName} ,目前用户希望翻译的语言是 ${targetLangName}
 
-Output the result in **Markdown** format.
-- You can output what the original text is, and what the translation is, to make it easier for the user to understand and compare.
-- Do NOT include any JSON.
-- **Do NOT use code blocks (\`\`\`) for normal text.** content should be standard text.
-- Just output the translated text directly.
+            Output the result in **Markdown** format.
+            - You can output what the original text is, and what the translation is, to make it easier for the user to understand and compare.
+            - Do NOT include any JSON.
+            - **Do NOT use code blocks (\`\`\`) for normal text.** content should be standard text.
+            - Just output the translated text directly.
 
-所以请你用的所有的解释性的文字都要用用户的母语来说.
-`;
+            所以请你用的所有的解释性的文字都要用用户的母语来说.
+        `;
 
 		if (promptUser && promptUser.trim() !== '') {
 			finalPrompt += `\n\nUser Requirement: ${promptUser}`;

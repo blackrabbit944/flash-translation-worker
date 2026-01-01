@@ -2,7 +2,7 @@ import { AutoRouter } from 'itty-router';
 import { handleTranslation } from './controllers/translation';
 import { handleLogin, handleRefresh } from './controllers/auth';
 import { handleRevenueCatWebhook } from './controllers/revenuecat';
-import { handleTextTranslation, handleImageTranslation, handleRecognition } from './controllers/translation';
+import { handleTextTranslation, handleImageTranslation, handleRecognition, handleLongTextTranslation } from './controllers/translation';
 import { handleTts, handleTtsPreview, handleTts2 } from './controllers/tts';
 import { handleGetQuota, handleInitData } from './controllers/user';
 import { withAuth } from './middleware/auth';
@@ -13,6 +13,8 @@ const router = AutoRouter();
 router.get('/translation/live', withAuth, handleTranslation);
 // @ts-ignore
 router.post('/translation/text', (req, env, ctx) => handleTextTranslation(req, env, ctx));
+// @ts-ignore
+router.post('/translation/longtext', (req, env, ctx) => handleLongTextTranslation(req, env, ctx));
 // @ts-ignore
 router.post('/translation/tts', (req, env, ctx) => handleTts(req, env, ctx));
 // @ts-ignore

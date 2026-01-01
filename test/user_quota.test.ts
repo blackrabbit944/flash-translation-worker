@@ -44,18 +44,18 @@ describe('User Quota API', () => {
 		expect(body.tier).toBe('FREE');
 		expect(body.quotas).toBeDefined();
 
-		// Text Translation (Free limit 300 daily)
+		// Text Translation (Free limit 300 daily -> NO, it is 40 daily/100 total now)
 		const textQuota = body.quotas.text_translation;
 		expect(textQuota).toBeDefined();
-		expect(textQuota.daily.limit).toBe(3);
+		expect(textQuota.daily.limit).toBe(40);
 		expect(textQuota.daily.used).toBe(1);
-		expect(textQuota.daily.remaining).toBe(2);
+		expect(textQuota.daily.remaining).toBe(39);
 
 		// Total limit should exist for FREE user
 		expect(textQuota.total).toBeDefined();
-		expect(textQuota.total.limit).toBe(10);
+		expect(textQuota.total.limit).toBe(100);
 		expect(textQuota.total.used).toBe(1);
-		expect(textQuota.total.remaining).toBe(9);
+		expect(textQuota.total.remaining).toBe(99);
 
 		// Other types should exist
 		expect(body.quotas.image_translation).toBeDefined();
@@ -71,7 +71,7 @@ describe('User Quota API', () => {
 			.insert(userEntitlements)
 			.values({
 				userId: proUserId,
-				entitlementId: 'pro_membership',
+				entitlementId: 'pro_member',
 				status: 'active',
 				expiresAt: Date.now() + 10000000,
 			})
@@ -96,7 +96,10 @@ describe('User Quota API', () => {
 		expect(textQuota).toBeDefined();
 		expect(textQuota.daily.limit).toBe(100);
 
-		// PRO should NOT have total limit
-		expect(textQuota.total).toBeUndefined();
+		// PRO SHOULD have total limit structure, but with -1 indicating unlimited/not-applicable
+		expect(textQuota.total).toBeDefined();
+		expect(textQuota.total.limit).toBe(-1);
+		expect(textQuota.total.remaining).toBe(-1);
+		expect(textQuota.total.used).toBe(0);
 	});
 });

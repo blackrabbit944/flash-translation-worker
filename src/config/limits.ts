@@ -40,6 +40,7 @@ export const TIER_LIMITS: Record<MembershipTier, Record<ResourceType, Quota>> = 
 
 export const ENDPOINT_TYPE_MAP: Record<string, ResourceType> = {
 	'/translation/text': 'text_translation',
+	'/translation/longtext': 'text_translation',
 	'/translation/image': 'image_translation',
 	'/translation/live': 'live_translation',
 	'/translation/tts': 'tts',

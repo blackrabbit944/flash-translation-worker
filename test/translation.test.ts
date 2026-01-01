@@ -88,9 +88,9 @@ describe('Text Translation API', () => {
 	});
 
 	it('enforces rate limits (free tier default)', async () => {
-		// Seed logs to exceed limit (5)
+		// Seed logs to exceed limit (Free tier daily text_translation limit is 40)
 		const { logUsage } = await import('../src/models/usage');
-		const limit = 5;
+		const limit = 40;
 
 		for (let i = 0; i < limit; i++) {
 			await logUsage(env.logs_db, userId, 'test', 10, 10, 100, 'text_translation');
@@ -124,7 +124,7 @@ describe('Text Translation API', () => {
 		const token = await sign(payload, env.JWT_SECRET);
 
 		const db = createDb(env.logs_db);
-		const limit = 10;
+		const limit = 101; // Limit is 100
 		// We need to simulate usage that counts towards TOTAL but isn't from today
 		// (so we don't hit daily limits first, if daily limit < total limit).
 		// We do this by manually inserting into userUsageStats with 'total' type.
@@ -184,7 +184,7 @@ describe('Text Translation API', () => {
 		const token = await sign(payload, env.JWT_SECRET);
 
 		const db = createDb(env.logs_db);
-		const limit = 3; // FREE tier image limit is 3
+		const limit = 21; // FREE tier image total limit is 20
 
 		const { userUsageStats } = await import('../src/db/schema');
 

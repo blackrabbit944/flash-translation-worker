@@ -23,7 +23,7 @@ describe('Live Translation API (Placeholder Verification)', () => {
 			.insert(userEntitlements)
 			.values({
 				userId: userId,
-				entitlementId: 'pro_membership',
+				entitlementId: 'pro_member',
 				status: 'active',
 				expiresAt: Date.now() + 3600 * 1000,
 			})
@@ -88,10 +88,10 @@ describe('Live Translation API (Placeholder Verification)', () => {
 
 		// Seed 5 usage logs (Live Translation daily limit for FREE is 5)
 
-		// Seed usage to exceed limit (Daily Free Limit is 300 seconds/units?? Check limits.ts. Assuming 300.)
+		// Seed usage to exceed limit (Daily Free Limit is 600 seconds.
 		// getUsageStats uses durationSeconds for live_translation.
-		// So we insert one log with > 300 duration.
-		await Usage.logUsage(env.logs_db, userId, 'test-model', 10, 10, 20, 'live_translation', undefined, 301);
+		// So we insert one log with > 600 duration.
+		await Usage.logUsage(env.logs_db, userId, 'test-model', 10, 10, 20, 'live_translation', undefined, 601);
 
 		const request = new IncomingRequest('http://example.com/translation/live', {
 			headers: { Authorization: `Bearer ${token}` },

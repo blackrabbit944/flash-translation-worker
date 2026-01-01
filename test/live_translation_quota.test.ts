@@ -3,10 +3,18 @@ import { describe, it, expect, beforeAll } from 'vitest';
 import worker from '../src/index';
 // @ts-ignore
 import { createDb } from '../src/db';
-import { usageLogs, userEntitlements } from '../src/db/schema';
+import { usageLogs, userEntitlements, userUsageStats } from '../src/db/schema';
 import { sign } from '../src/utils/jwt';
 
 const IncomingRequest = Request<unknown, IncomingRequestCfProperties>;
+
+function getTodayString() {
+	const date = new Date();
+	const yyyy = date.getUTCFullYear();
+	const mm = String(date.getUTCMonth() + 1).padStart(2, '0');
+	const dd = String(date.getUTCDate()).padStart(2, '0');
+	return `${yyyy}-${mm}-${dd}`;
+}
 
 describe('Live Translation Quota', () => {
 	beforeAll(async () => {
@@ -20,7 +28,7 @@ describe('Live Translation Quota', () => {
 		const payload = { uid: userId, exp: Math.floor(Date.now() / 1000) + 3600 };
 		const token = await sign(payload, env.JWT_SECRET);
 
-		// Limit is 300s. Seed 301s usage.
+		// Limit is 600s. Seed 601s usage.
 		const db = createDb(env.logs_db);
 		await db
 			.insert(usageLogs)
@@ -32,8 +40,22 @@ describe('Live Translation Quota', () => {
 				inputTokens: 0,
 				outputTokens: 0,
 				costMicros: 0,
-				durationSeconds: 301,
+				durationSeconds: 601,
 				createdAt: Date.now(),
+			})
+			.execute();
+
+		// Seed Aggregated Stats
+		await db
+			.insert(userUsageStats)
+			.values({
+				userId: userId,
+				endpoint: 'live_translation',
+				periodType: 'daily',
+				periodValue: getTodayString(),
+				count: 1,
+				durationSeconds: 601,
+				totalTokens: 0,
 			})
 			.execute();
 
@@ -76,6 +98,20 @@ describe('Live Translation Quota', () => {
 			})
 			.execute();
 
+		// Seed Aggregated Stats
+		await db
+			.insert(userUsageStats)
+			.values({
+				userId: userId,
+				endpoint: 'live_translation',
+				periodType: 'daily',
+				periodValue: getTodayString(),
+				count: 1,
+				durationSeconds: 100,
+				totalTokens: 0,
+			})
+			.execute();
+
 		const request = new IncomingRequest('http://example.com/translation/live', {
 			method: 'GET',
 			headers: {
@@ -105,7 +141,7 @@ describe('Live Translation Quota', () => {
 			.insert(userEntitlements)
 			.values({
 				userId: userId,
-				entitlementId: 'pro_membership',
+				entitlementId: 'pro_member', // FIXED: pro_member
 				status: 'active',
 				expiresAt: Date.now() + 10000000,
 			})
@@ -125,6 +161,20 @@ describe('Live Translation Quota', () => {
 				costMicros: 0,
 				durationSeconds: 7201,
 				createdAt: Date.now(),
+			})
+			.execute();
+
+		// Seed Aggregated Stats
+		await dbLogs
+			.insert(userUsageStats)
+			.values({
+				userId: userId,
+				endpoint: 'live_translation',
+				periodType: 'daily',
+				periodValue: getTodayString(),
+				count: 1,
+				durationSeconds: 7201,
+				totalTokens: 0,
 			})
 			.execute();
 

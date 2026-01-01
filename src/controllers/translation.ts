@@ -430,6 +430,61 @@ export async function handleTextTranslation(request: IRequest, env: Env, ctx: Ex
 	}
 }
 
+export async function handleLongTextTranslation(request: IRequest, env: Env, ctx: ExecutionContext) {
+	// Parse body
+	let body;
+	try {
+		body = (await request.json()) as any;
+	} catch (e) {
+		return new Response('Invalid JSON', { status: 400 });
+	}
+
+	const text = body.text;
+	let sourceLangCode = body.source_language || body.source_lang;
+	let targetLangCode = body.target_language || body.target_lang;
+
+	if (sourceLangCode) sourceLangCode = normalizeLanguageTag(sourceLangCode);
+	if (targetLangCode) targetLangCode = normalizeLanguageTag(targetLangCode);
+
+	if (!text || !sourceLangCode || !targetLangCode) {
+		return new Response('Missing required fields: text, source_language, target_language', { status: 400 });
+	}
+
+	if (!isValidLanguageCode(sourceLangCode) || !isValidLanguageCode(targetLangCode)) {
+		return new Response('Invalid language code: must be a valid BCP-47 language tag', { status: 400 });
+	}
+
+	// Auth Check
+	const authResponse = await withAuth(request, env, ctx);
+	if (authResponse) {
+		return authResponse;
+	}
+
+	const authReq = request as AuthenticatedRequest;
+	if (!authReq.userId) {
+		return new Response('Unauthorized', { status: 401 });
+	}
+
+	const sourceLangName = getLanguageName(sourceLangCode);
+	const targetLangName = getLanguageName(targetLangCode);
+
+	try {
+		return await geminiService.translateLongTextAndStream(
+			env,
+			authReq.userId,
+			text,
+			sourceLangCode,
+			targetLangCode,
+			sourceLangName,
+			targetLangName,
+			ctx
+		);
+	} catch (error: any) {
+		console.error('Long Text Translation Error:', error);
+		return new Response(`Translation failed: ${error.message}`, { status: 500 });
+	}
+}
+
 export async function handleImageTranslation(request: IRequest, env: Env, ctx: ExecutionContext) {
 	const authReq = request as AuthenticatedRequest;
 
