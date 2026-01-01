@@ -608,3 +608,120 @@ export async function handleRecognition(request: IRequest, env: Env, ctx: Execut
 		return new Response(`Recognition failed: ${error.message}`, { status: 500 });
 	}
 }
+
+export async function handleClassifyText(request: IRequest, env: Env, ctx: ExecutionContext) {
+	// Parse body
+	let body;
+	try {
+		body = (await request.json()) as any;
+	} catch (e) {
+		return new Response('Invalid JSON', { status: 400 });
+	}
+
+	const text = body.text;
+
+	if (!text) {
+		return new Response('Missing required field: text', { status: 400 });
+	}
+
+	// Authentication and Quota Check
+	const authResponse = await withAuth(request, env, ctx);
+	if (authResponse) {
+		return authResponse;
+	}
+
+	const authReq = request as AuthenticatedRequest;
+	if (!authReq.userId) {
+		return new Response('Unauthorized', { status: 401 });
+	}
+
+	try {
+		const result = await geminiService.classifyText(env, authReq.userId, text, ctx);
+		return new Response(JSON.stringify(result), {
+			headers: { 'Content-Type': 'application/json' },
+		});
+	} catch (error: any) {
+		console.error('Classification Error:', error);
+		return new Response(`Classification failed: ${error.message}`, { status: 500 });
+	}
+}
+
+export async function handleWordTranslation(request: IRequest, env: Env, ctx: ExecutionContext) {
+	// Parse body
+	let body;
+	try {
+		body = (await request.json()) as any;
+	} catch (e) {
+		return new Response('Invalid JSON', { status: 400 });
+	}
+
+	const text = body.text;
+	let sourceLangCode = body.source_language || body.source_lang;
+	let targetLangCode = body.target_language || body.target_lang;
+
+	if (sourceLangCode) sourceLangCode = normalizeLanguageTag(sourceLangCode);
+	if (targetLangCode) targetLangCode = normalizeLanguageTag(targetLangCode);
+
+	if (!text || !sourceLangCode || !targetLangCode) {
+		return new Response('Missing required fields: text, source_language, target_language', { status: 400 });
+	}
+
+	if (!isValidLanguageCode(sourceLangCode) || !isValidLanguageCode(targetLangCode)) {
+		return new Response('Invalid language code: must be a valid BCP-47 language tag (e.g. "en-US", "zh-TW")', { status: 400 });
+	}
+
+	// 1. Check Cache First (before auth to save quota)
+	const cachedResult = await geminiService.findInCache(env, text, sourceLangCode, targetLangCode);
+
+	if (cachedResult) {
+		console.log('Cache hit for word:', text);
+		// Return cached result as SSE
+		const mimicResponse = {
+			candidates: [
+				{
+					content: { parts: [{ text: cachedResult }] },
+				},
+			],
+		};
+		const sseData = `data: ${JSON.stringify(mimicResponse)}\n\n`;
+
+		return new Response(sseData, {
+			headers: {
+				'Content-Type': 'text/event-stream',
+				'Cache-Control': 'no-cache',
+				Connection: 'keep-alive',
+			},
+		});
+	}
+
+	// 2. Cache Miss: Perform Authentication and Quota Check
+	const authResponse = await withAuth(request, env, ctx);
+	if (authResponse) {
+		return authResponse;
+	}
+
+	// Auth success
+	const authReq = request as AuthenticatedRequest;
+	if (!authReq.userId) {
+		return new Response('Unauthorized', { status: 401 });
+	}
+
+	const sourceLangName = getLanguageName(sourceLangCode);
+	const targetLangName = getLanguageName(targetLangCode);
+
+	try {
+		return await geminiService.translateWordAndStream(
+			env,
+			authReq.userId,
+			text,
+			sourceLangCode,
+			targetLangCode,
+			sourceLangName,
+			targetLangName,
+			ctx
+		);
+	} catch (error: any) {
+		console.error('Word Translation Error:', error);
+		return new Response(`Word translation failed: ${error.message}`, { status: 500 });
+	}
+}

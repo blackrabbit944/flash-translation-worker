@@ -41,6 +41,16 @@ export const translations = sqliteTable('translations', {
 		.default(sql`(strftime('%s', 'now') * 1000)`),
 });
 
+export const textClassifications = sqliteTable('text_classifications', {
+	id: text('id').primaryKey(),
+	textHash: text('text_hash').notNull().unique(),
+	text: text('text').notNull(),
+	classificationType: text('classification_type').notNull(), // 'word' | 'sentence' | 'multiple_sentences'
+	createdAt: integer('created_at')
+		.notNull()
+		.default(sql`(strftime('%s', 'now') * 1000)`),
+});
+
 export const ttsLogs = sqliteTable('tts_logs', {
 	id: text('id').primaryKey(),
 	userId: text('user_id').notNull(),

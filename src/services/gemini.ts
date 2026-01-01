@@ -250,6 +250,254 @@ export class GeminiService {
 		return this.handleStreamResponse(response, env, ctx, userId, modelName, 'text_translation', undefined);
 	}
 
+	async classifyText(
+		env: Env,
+		userId: string,
+		text: string,
+		ctx: ExecutionContext
+	): Promise<{ type: 'word' | 'sentence' | 'multiple_sentences' }> {
+		const textHash = await getMd5(text);
+
+		// 1. Check Cache First
+		const db = createDb(env.words_db);
+		const { textClassifications } = await import('../db/schema');
+
+		const cached = await db.select().from(textClassifications).where(eq(textClassifications.textHash, textHash)).get();
+
+		if (cached) {
+			console.log('Classification cache hit for:', text);
+			return { type: cached.classificationType as 'word' | 'sentence' | 'multiple_sentences' };
+		}
+
+		// 2. Cache Miss: Perform Classification
+		const apiKey = env.GEMINI_API_KEY;
+		const modelName = 'gemini-3-flash-preview';
+
+		// Use Cloudflare AI Gateway
+		const urlString = getGatewayUrl(modelName, apiKey);
+
+		const prompt = `Classify the following text into one of these types:
+- "word" (Single word or short phrase)
+- "sentence" (Complete sentence)
+- "multiple_sentences" (Paragraph or multiple sentences)
+
+Return ONLY a JSON object with a "type" field containing one of the exact strings above. Nothing else.
+
+Input: "${text}"`;
+
+		const body = {
+			contents: [{ parts: [{ text: prompt }] }],
+			generationConfig: {
+				response_mime_type: 'application/json',
+			},
+		};
+
+		const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+		if (env.CLOUDFLARE_GATEWAY_TOKEN) {
+			headers['cf-aig-authorization'] = `Bearer ${env.CLOUDFLARE_GATEWAY_TOKEN}`;
+		}
+
+		const response = await fetch(urlString, {
+			method: 'POST',
+			headers: headers,
+			body: JSON.stringify(body),
+		});
+
+		if (!response.ok) {
+			const errText = await response.text();
+			console.error('Gemini Classification API Error:', response.status, errText);
+			throw new Error(`Gemini API Error: ${response.status}`);
+		}
+
+		// Parse SSE response
+		const reader = response.body?.getReader();
+		const decoder = new TextDecoder();
+		let buffer = '';
+		let usageMetadata = { promptTokenCount: 0, candidatesTokenCount: 0 };
+		let resultText = '';
+
+		if (reader) {
+			while (true) {
+				const { done, value } = await reader.read();
+				if (done) break;
+
+				const chunk = decoder.decode(value, { stream: true });
+				buffer += chunk;
+				const lines = buffer.split('\n');
+				buffer = lines.pop() || '';
+
+				for (const line of lines) {
+					if (line.startsWith('data: ')) {
+						try {
+							const jsonStr = line.slice(6);
+							const data = JSON.parse(jsonStr);
+							if (data.usageMetadata) {
+								usageMetadata = data.usageMetadata;
+							}
+							if (data.candidates && data.candidates[0]?.content?.parts?.[0]?.text) {
+								resultText += data.candidates[0].content.parts[0].text;
+							}
+						} catch (e) {
+							// ignore parse errors
+						}
+					}
+				}
+			}
+		}
+
+		// Log usage with text_classify endpoint
+		if (usageMetadata.promptTokenCount > 0) {
+			const result = calculateCost(modelName, usageMetadata, PRICING_PER_1M);
+			await logUsage(env.logs_db, userId, modelName, result.input.total, result.output.total, result.cost, 'text_classify');
+		}
+
+		// Parse classification result
+		let classificationType: 'word' | 'sentence' | 'multiple_sentences';
+		try {
+			const parsed = JSON.parse(resultText);
+			const type = parsed.type?.toLowerCase();
+
+			if (type && type.includes('multiple_sentences')) {
+				classificationType = 'multiple_sentences';
+			} else if (type && type.includes('word')) {
+				classificationType = 'word';
+			} else {
+				classificationType = 'sentence';
+			}
+		} catch (e) {
+			console.error('Failed to parse classification result:', resultText);
+			classificationType = 'sentence'; // Default fallback
+		}
+
+		// 3. Cache the Result
+		try {
+			await db
+				.insert(textClassifications)
+				.values({
+					id: crypto.randomUUID(),
+					textHash: textHash,
+					text: text,
+					classificationType: classificationType,
+					createdAt: Date.now(),
+				})
+				.execute()
+				.catch((e) => console.error('Classification cache save error', e));
+		} catch (e) {
+			console.error('Failed to cache classification:', e);
+		}
+
+		return { type: classificationType };
+	}
+
+	async translateWordAndStream(
+		env: Env,
+		userId: string,
+		text: string,
+		sourceLang: string,
+		targetLang: string,
+		sourceLangName: string,
+		targetLangName: string,
+		ctx: ExecutionContext
+	): Promise<Response> {
+		const textHash = await getMd5(text);
+
+		// 1. Check Cache
+		const cachedResult = await this.findInCache(env, text, sourceLang, targetLang);
+
+		if (cachedResult) {
+			console.log('Cache hit for word:', text);
+			// Return cached result as SSE to mimic Gemini stream for client compatibility
+			const mimicResponse = {
+				candidates: [
+					{
+						content: { parts: [{ text: cachedResult }] },
+					},
+				],
+			};
+			const sseData = `data: ${JSON.stringify(mimicResponse)}\n\n`;
+
+			return new Response(sseData, {
+				headers: {
+					'Content-Type': 'text/event-stream',
+					'Cache-Control': 'no-cache',
+					Connection: 'keep-alive',
+				},
+			});
+		}
+
+		// 2. Prepare Gemini Request
+		const apiKey = env.GEMINI_API_KEY;
+		const modelName = 'gemini-3-flash-preview';
+
+		// Use Cloudflare AI Gateway
+		const urlString = getGatewayUrl(modelName, apiKey);
+
+		const prompt = `You are a smart translator. Analyze the following text and translate it from ${sourceLangName} to ${targetLangName}.
+
+This is a word or short phrase translation. Output **ONLY** a valid JSON object with the following structure:
+
+{
+    "type": "word",
+    "original": "the original text",
+    "translation": "the translated text",
+    "phonetic": "phonetic transcription if applicable",
+    "examples": [
+        {
+            "source": "example sentence in source language",
+            "target": "example sentence in target language"
+        }
+    ]
+}
+
+Text to translate: "${text}"`;
+
+		const body = {
+			contents: [{ parts: [{ text: prompt }] }],
+			generationConfig: {
+				response_mime_type: 'application/json',
+			},
+		};
+
+		const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+		if (env.CLOUDFLARE_GATEWAY_TOKEN) {
+			headers['cf-aig-authorization'] = `Bearer ${env.CLOUDFLARE_GATEWAY_TOKEN}`;
+		}
+
+		const response = await fetch(urlString, {
+			method: 'POST',
+			headers: headers,
+			body: JSON.stringify(body),
+		});
+
+		if (!response.ok) {
+			const errText = await response.text();
+			console.error('Gemini Word Translation API Error:', response.status, errText);
+			throw new Error(`Gemini API Error: ${response.status}`);
+		}
+
+		// 3. Handle Stream & Logging via Helper, with Cache Callback
+		return this.handleStreamResponse(response, env, ctx, userId, modelName, 'text_translation', textHash, async (fullText) => {
+			// Cache Callback
+			if (fullText) {
+				// Re-create DB connection here since we are inside a callback
+				const db = createDb(env.words_db);
+				await db
+					.insert(translations)
+					.values({
+						id: crypto.randomUUID(),
+						sourceTextHash: textHash,
+						sourceText: text,
+						sourceLang: sourceLang,
+						targetLang: targetLang,
+						resultJson: fullText,
+						createdAt: Date.now(),
+					})
+					.execute()
+					.catch((e) => console.error('Cache save error', e));
+			}
+		});
+	}
+
 	async translateImageAndStream(
 		env: Env,
 		userId: string,
