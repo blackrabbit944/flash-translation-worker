@@ -1,5 +1,5 @@
 import { env, applyD1Migrations, createExecutionContext, waitOnExecutionContext } from 'cloudflare:test';
-import { describe, it, expect, beforeAll, vi } from 'vitest';
+import { describe, it, expect, beforeAll, afterEach, vi } from 'vitest';
 import worker from '../src/index';
 import { sign } from '../src/utils/jwt';
 import { createDb } from '../src/db';
@@ -28,6 +28,10 @@ describe('Word Translation API', () => {
 			exp: Math.floor(Date.now() / 1000) + 3600,
 		};
 		validToken = await sign(payload, env.JWT_SECRET);
+	});
+
+	afterEach(() => {
+		vi.restoreAllMocks();
 	});
 
 	it('requires authentication', async () => {
@@ -265,5 +269,56 @@ describe('Word Translation API', () => {
 
 		expect(response.status).toBe(429);
 		expect(bodyText).toContain('Total Usage limit exceeded');
+	});
+
+	it('returns correct SSE format with buffered response (mocked fetch)', async () => {
+		const fetchSpy = vi.spyOn(global, 'fetch');
+		const mockGeminiResponse = JSON.stringify({
+			usageMetadata: { promptTokenCount: 10, candidatesTokenCount: 10 },
+			candidates: [
+				{
+					content: { parts: [{ text: '{"type":"word"}' }] },
+				},
+			],
+		});
+
+		// Mock SSE stream
+		const stream = new ReadableStream({
+			start(controller) {
+				controller.enqueue(new TextEncoder().encode(`data: ${mockGeminiResponse}\n\n`));
+				controller.close();
+			},
+		});
+
+		fetchSpy.mockResolvedValueOnce(new Response(stream));
+
+		const request = new IncomingRequest('http://example.com/translation/word', {
+			method: 'POST',
+			headers: { Authorization: `Bearer ${validToken}` },
+			body: JSON.stringify({
+				text: 'buffered_test',
+				source_language: 'en',
+				target_language: 'zh',
+			}),
+		});
+
+		const ctx = createExecutionContext();
+		const response = await worker.fetch(request, env, ctx);
+		const text = await response.text();
+		await waitOnExecutionContext(ctx);
+
+		expect(response.status).toBe(200);
+
+		// Verify structure matches mimicResponse
+		// data: {"candidates":[{"content":{"parts":[{"text":"...
+		const ssePrefix = 'data: ';
+		const dataLine = text.split('\n').find((line: string) => line.startsWith(ssePrefix));
+		expect(dataLine).toBeDefined();
+
+		const jsonStr = dataLine!.slice(ssePrefix.length);
+		const data = JSON.parse(jsonStr);
+		const innerText = data.candidates[0].content.parts[0].text;
+
+		expect(innerText).toContain('{"type":"word"}');
 	});
 });

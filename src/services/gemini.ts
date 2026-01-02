@@ -277,13 +277,13 @@ export class GeminiService {
 		const urlString = getGatewayUrl(modelName, apiKey);
 
 		const prompt = `Classify the following text into one of these types:
-- "word" (Single word or short phrase)
-- "sentence" (Complete sentence)
-- "multiple_sentences" (Paragraph or multiple sentences)
+            - "word" (Single word or short phrase)
+            - "sentence" (Complete sentence)
+            - "multiple_sentences" (Paragraph or multiple sentences)
 
-Return ONLY a JSON object with a "type" field containing one of the exact strings above. Nothing else.
+            Return ONLY a JSON object with a "type" field containing one of the exact strings above. Nothing else.
 
-Input: "${text}"`;
+            Input: "${text}"`;
 
 		const body = {
 			contents: [{ parts: [{ text: prompt }] }],
@@ -401,55 +401,40 @@ Input: "${text}"`;
 	): Promise<Response> {
 		const textHash = await getMd5(text);
 
-		// 1. Check Cache
-		const cachedResult = await this.findInCache(env, text, sourceLang, targetLang);
-
-		if (cachedResult) {
-			console.log('Cache hit for word:', text);
-			// Return cached result as SSE to mimic Gemini stream for client compatibility
-			const mimicResponse = {
-				candidates: [
-					{
-						content: { parts: [{ text: cachedResult }] },
-					},
-				],
-			};
-			const sseData = `data: ${JSON.stringify(mimicResponse)}\n\n`;
-
-			return new Response(sseData, {
-				headers: {
-					'Content-Type': 'text/event-stream',
-					'Cache-Control': 'no-cache',
-					Connection: 'keep-alive',
-				},
-			});
-		}
-
-		// 2. Prepare Gemini Request
+		// 1. Prepare Gemini Request
 		const apiKey = env.GEMINI_API_KEY;
 		const modelName = 'gemini-3-flash-preview';
 
 		// Use Cloudflare AI Gateway
 		const urlString = getGatewayUrl(modelName, apiKey);
 
-		const prompt = `You are a smart translator. Analyze the following text and translate it from ${sourceLangName} to ${targetLangName}.
-
-This is a word or short phrase translation. Output **ONLY** a valid JSON object with the following structure:
-
-{
-    "type": "word",
-    "original": "the original text",
-    "translation": "the translated text",
-    "phonetic": "phonetic transcription if applicable",
-    "examples": [
+		const prompt = `You are a smart translator. Analyze the following text and translate it from ${targetLangName} to ${sourceLangName}.
+        
+        Input is verified to be a **Word** or **Phrase**.
+        
+        Output **ONLY** a valid JSON object with the following structure:
+        
         {
-            "source": "example sentence in source language",
-            "target": "example sentence in target language"
+            "type": "word",
+            "translation": "Translated word",
+            "kana": "Pronunciation (if applicable, e.g. Japanese Kana, Pinyin, otherwise null)",
+            "examples": [
+                {
+                    "original": "Example sentence 1 in ${targetLang}",
+                    "translation": "Example sentence 1 in ${sourceLang}",
+                    "kana": "Pronunciation of example 1 (if applicable)"
+                }
+            ],
+            "memory_tip": "A fun or useful tip to remember this word",
+            "explanation": "Brief explanation of meaning and usage",
+            "english_word": "Apple"
         }
-    ]
-}
+        
+        你所有的回答要用 "${sourceLang}" 语言回答,因为你面对的用户的母语是: ${sourceLang}。
+        examples要给出2个例句.
 
-Text to translate: "${text}"`;
+        Input Text:
+        "${text}"`;
 
 		const body = {
 			contents: [{ parts: [{ text: prompt }] }],
@@ -475,13 +460,54 @@ Text to translate: "${text}"`;
 			throw new Error(`Gemini API Error: ${response.status}`);
 		}
 
-		// 3. Handle Stream & Logging via Helper, with Cache Callback
-		return this.handleStreamResponse(response, env, ctx, userId, modelName, 'text_translation', textHash, async (fullText) => {
-			// Cache Callback
-			if (fullText) {
-				// Re-create DB connection here since we are inside a callback
-				const db = createDb(env.words_db);
-				await db
+		// 2. Buffer Stream & Log Usage
+		const reader = response.body?.getReader();
+		const decoder = new TextDecoder();
+		let buffer = '';
+		let usageMetadata = { promptTokenCount: 0, candidatesTokenCount: 0 };
+		let fullText = '';
+
+		if (reader) {
+			while (true) {
+				const { done, value } = await reader.read();
+				if (done) break;
+
+				const chunk = decoder.decode(value, { stream: true });
+				buffer += chunk;
+				const lines = buffer.split('\n');
+				buffer = lines.pop() || '';
+
+				for (const line of lines) {
+					if (line.startsWith('data: ')) {
+						try {
+							const jsonStr = line.slice(6);
+							const data = JSON.parse(jsonStr);
+							if (data.usageMetadata) {
+								usageMetadata = data.usageMetadata;
+							}
+							if (data.candidates && data.candidates[0]?.content?.parts?.[0]?.text) {
+								fullText += data.candidates[0].content.parts[0].text;
+							}
+						} catch (e) {
+							// ignore parse errors
+						}
+					}
+				}
+			}
+		}
+
+		// Log usage
+		if (usageMetadata.promptTokenCount > 0) {
+			const result = calculateCost(modelName, usageMetadata, PRICING_PER_1M);
+			// Use waitUntil to not block response
+			ctx.waitUntil(logUsage(env.logs_db, userId, modelName, result.input.total, result.output.total, result.cost, 'text_translation'));
+		}
+
+		// 3. Save to Cache
+		if (fullText) {
+			const db = createDb(env.words_db);
+			ctx.waitUntil(
+				db
 					.insert(translations)
 					.values({
 						id: crypto.randomUUID(),
@@ -493,8 +519,26 @@ Text to translate: "${text}"`;
 						createdAt: Date.now(),
 					})
 					.execute()
-					.catch((e) => console.error('Cache save error', e));
-			}
+					.catch((e) => console.error('Cache save error', e))
+			);
+		}
+
+		// 4. Return as Single SSE Event (Mimic structure)
+		const mimicResponse = {
+			candidates: [
+				{
+					content: { parts: [{ text: fullText }] },
+				},
+			],
+		};
+		const sseData = `data: ${JSON.stringify(mimicResponse)}\n\n`;
+
+		return new Response(sseData, {
+			headers: {
+				'Content-Type': 'text/event-stream',
+				'Cache-Control': 'no-cache',
+				Connection: 'keep-alive',
+			},
 		});
 	}
 
@@ -578,17 +622,74 @@ Text to translate: "${text}"`;
 		// Calculate hash BEFORE helper
 		const imageHash = await getMd5(pureBase64);
 
-		// 2. Handle Stream & Logging via Helper
-		return this.handleStreamResponse(
-			response,
-			env,
-			ctx,
-			userId,
-			modelName,
-			'image_translation',
-			imageHash
-			// No onComplete callback for Image (no caching)
-		);
+		// 2. Buffer Stream & Log Usage
+		const reader = response.body?.getReader();
+		const decoder = new TextDecoder();
+
+		let fullText = '';
+		let buffer = '';
+		let usageMetadata = { promptTokenCount: 0, candidatesTokenCount: 0, thoughtsTokenCount: 0 };
+
+		try {
+			if (reader) {
+				while (true) {
+					const { done, value } = await reader.read();
+					if (done) break;
+
+					const chunk = decoder.decode(value, { stream: true });
+					buffer += chunk;
+					const lines = buffer.split('\n');
+					buffer = lines.pop() || '';
+
+					for (const line of lines) {
+						if (line.startsWith('data: ')) {
+							const jsonStr = line.slice(6);
+							try {
+								const data = JSON.parse(jsonStr);
+								if (data.usageMetadata) {
+									usageMetadata = data.usageMetadata;
+								}
+								if (data.candidates && data.candidates[0]?.content?.parts?.[0]?.text) {
+									fullText += data.candidates[0].content.parts[0].text;
+								}
+							} catch (e) {
+								// ignore
+							}
+						}
+					}
+				}
+			}
+
+			// Save Usage Log (Fire and Forget)
+			if (usageMetadata.promptTokenCount > 0) {
+				const result = calculateCost(modelName, usageMetadata, PRICING_PER_1M);
+				const inputTokens = result.input.total;
+				const outputTokens = result.output.total;
+
+				ctx.waitUntil(logUsage(env.logs_db, userId, modelName, inputTokens, outputTokens, result.cost, 'image_translation', imageHash));
+			}
+		} catch (error) {
+			console.error('Image Translation Buffering Error:', error);
+			// If buffering failed, we might want to throw or return partial
+		}
+
+		// 3. Return as Single SSE Event (Mimic structure)
+		const mimicResponse = {
+			candidates: [
+				{
+					content: { parts: [{ text: fullText }] },
+				},
+			],
+		};
+		const sseData = `data: ${JSON.stringify(mimicResponse)}\n\n`;
+
+		return new Response(sseData, {
+			headers: {
+				'Content-Type': 'text/event-stream',
+				'Cache-Control': 'no-cache',
+				Connection: 'keep-alive',
+			},
+		});
 	}
 
 	private async handleStreamResponse(

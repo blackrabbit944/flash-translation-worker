@@ -674,7 +674,6 @@ export async function handleWordTranslation(request: IRequest, env: Env, ctx: Ex
 	const cachedResult = await geminiService.findInCache(env, text, sourceLangCode, targetLangCode);
 
 	if (cachedResult) {
-		console.log('Cache hit for word:', text);
 		// Return cached result as SSE
 		const mimicResponse = {
 			candidates: [
@@ -683,8 +682,8 @@ export async function handleWordTranslation(request: IRequest, env: Env, ctx: Ex
 				},
 			],
 		};
-		const sseData = `data: ${JSON.stringify(mimicResponse)}\n\n`;
 
+		const sseData = `data: ${JSON.stringify(mimicResponse)}\n\n`;
 		return new Response(sseData, {
 			headers: {
 				'Content-Type': 'text/event-stream',
