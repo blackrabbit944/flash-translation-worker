@@ -1,10 +1,12 @@
 import { IRequest } from 'itty-router';
 import { AuthenticatedRequest, withAuth } from '../middleware/auth';
 import { GeminiService } from '../services/gemini';
+import { CorrectionRequest, OpenRouterService } from '../services/openrouter';
 
 import { getLanguageName, normalizeLanguageTag } from '../utils/languages';
 
 const geminiService = new GeminiService();
+const openRouterService = new OpenRouterService();
 
 import { logUsage } from '../models/usage';
 import { PRICING_PER_1M, PRICING_PER_1M_LIVE } from '../config/pricing';
@@ -722,5 +724,70 @@ export async function handleWordTranslation(request: IRequest, env: Env, ctx: Ex
 	} catch (error: any) {
 		console.error('Word Translation Error:', error);
 		return new Response(`Word translation failed: ${error.message}`, { status: 500 });
+	}
+}
+
+export async function handleInputCorrection(request: IRequest, env: Env, ctx: ExecutionContext) {
+	// Parse body
+	let body;
+	try {
+		body = (await request.json()) as any;
+	} catch (e) {
+		return new Response('Invalid JSON', { status: 400 });
+	}
+
+	const { original, translated, sourceLang, targetLang, original_input, translated_output, source_language, target_language } = body;
+
+	const finalOriginal = original || original_input;
+	const finalTranslated = translated || translated_output;
+	const finalSourceLang = sourceLang || source_language;
+	const finalTargetLang = targetLang || target_language;
+
+	// Validate required fields
+	if (!finalOriginal || !finalTranslated || !finalSourceLang || !finalTargetLang) {
+		return new Response('Missing required fields: original_input, translated_output, source_language, target_language', { status: 400 });
+	}
+
+	// Auth check (Optional: decide if correction needs auth, assuming yes based on other endpoints)
+	const authResponse = await withAuth(request, env, ctx);
+	if (authResponse) {
+		return authResponse;
+	}
+
+	try {
+		const correctedText = await openRouterService.correctInput(env, {
+			original: finalOriginal,
+			translated: finalTranslated,
+			sourceLang: finalSourceLang,
+			targetLang: finalTargetLang,
+		});
+
+		// Mimic Gemini response structure
+		const responseData = {
+			candidates: [
+				{
+					content: {
+						parts: [
+							{
+								text: correctedText,
+							},
+						],
+					},
+				},
+			],
+		};
+
+		const sseData = `data: ${JSON.stringify(responseData)}\n\n`;
+
+		return new Response(sseData, {
+			headers: {
+				'Content-Type': 'text/event-stream',
+				'Cache-Control': 'no-cache',
+				Connection: 'keep-alive',
+			},
+		});
+	} catch (error: any) {
+		console.error('Input Correction Error:', error);
+		return new Response(`Input Correction failed: ${error.message}`, { status: 500 });
 	}
 }

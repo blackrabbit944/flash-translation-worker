@@ -9,6 +9,7 @@ import {
 	handleLongTextTranslation,
 	handleClassifyText,
 	handleWordTranslation,
+	handleInputCorrection,
 } from './controllers/translation';
 import { handleTts, handleTtsPreview, handleTts2 } from './controllers/tts';
 import { handleGetQuota, handleInitData } from './controllers/user';
@@ -18,6 +19,8 @@ const router = AutoRouter();
 
 // @ts-ignore
 router.get('/translation/live', withAuth, handleTranslation);
+// @ts-ignore
+router.post('/translation/correct_input', (req, env, ctx) => handleInputCorrection(req, env, ctx));
 // @ts-ignore
 router.post('/translation/text', (req, env, ctx) => handleTextTranslation(req, env, ctx));
 // @ts-ignore
