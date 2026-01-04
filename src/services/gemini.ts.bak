@@ -200,11 +200,54 @@ export class GeminiService {
 		targetLangName: string,
 		ctx: ExecutionContext
 	): Promise<Response> {
-		// Use OpenRouter for cost-effective long text translation
-		const { OpenRouterService } = await import('./openrouter');
-		const openRouterService = new OpenRouterService();
+		// 1. Prepare Gemini Request
+		const apiKey = env.GEMINI_API_KEY;
+		const modelName = 'gemini-3-flash-preview';
 
-		return openRouterService.translateLongText(env, userId, text, sourceLang, targetLang, sourceLangName, targetLangName, ctx);
+		// Use Cloudflare AI Gateway
+		const urlString = getGatewayUrl(modelName, apiKey);
+
+		const prompt = `
+       你是一个专业的翻译员. 用户的母语是 ${sourceLangName} ,他经常需要翻译的语言是 ${targetLangName}.
+              
+       要求:
+       - 理解用户的输入并帮助用户翻译.
+       - 如果内容特别长,就直接翻译并输出给用户
+       - 如果句子只是一两句,我还希望你给用户讲解对应的语法,用用户的母语讲解
+       - 输出可以用markdown文本,来展示更多你想讲的数据
+       - 你要移除“您好,作为一个专业的翻译人员, 我很乐意帮你提供...这些开头的词语“,直接开始讲解你的翻译”
+        
+       用户的输入是:
+       "${text}"
+       `;
+
+		const body = {
+			contents: [{ parts: [{ text: prompt }] }],
+			generationConfig: {
+				response_mime_type: 'text/plain',
+			},
+		};
+
+		const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+		if (env.CLOUDFLARE_GATEWAY_TOKEN) {
+			headers['cf-aig-authorization'] = `Bearer ${env.CLOUDFLARE_GATEWAY_TOKEN}`;
+		}
+
+		const response = await fetch(urlString, {
+			method: 'POST',
+			headers: headers,
+			body: JSON.stringify(body),
+		});
+
+		if (!response.ok) {
+			const errText = await response.text();
+			console.error('Gemini LongText API Error:', response.status, errText);
+			throw new Error(`Gemini API Error: ${response.status}`);
+		}
+
+		// 2. Handle Stream & Logging via Helper
+		// We use 'text_translation' as endpoint to share quota with normal text translation
+		return this.handleStreamResponse(response, env, ctx, userId, modelName, 'text_translation', undefined);
 	}
 
 	async classifyText(
@@ -226,12 +269,105 @@ export class GeminiService {
 			return { type: cached.classificationType as 'word' | 'sentence' | 'multiple_sentences' };
 		}
 
-		// 2. Cache Miss: Perform Classification using OpenRouter
-		const { OpenRouterService } = await import('./openrouter');
-		const openRouterService = new OpenRouterService();
+		// 2. Cache Miss: Perform Classification
+		const apiKey = env.GEMINI_API_KEY;
+		const modelName = 'gemini-3-flash-preview';
 
-		const result = await openRouterService.classifyText(env, userId, text, ctx);
-		const classificationType = result.type;
+		// Use Cloudflare AI Gateway
+		const urlString = getGatewayUrl(modelName, apiKey);
+
+		const prompt = `Classify the following text into one of these types:
+            - "word" (Single word or short phrase)
+            - "sentence" (Complete sentence)
+            - "multiple_sentences" (Paragraph or multiple sentences)
+
+            Return ONLY a JSON object with a "type" field containing one of the exact strings above. Nothing else.
+
+            Input: "${text}"`;
+
+		const body = {
+			contents: [{ parts: [{ text: prompt }] }],
+			generationConfig: {
+				response_mime_type: 'application/json',
+			},
+		};
+
+		const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+		if (env.CLOUDFLARE_GATEWAY_TOKEN) {
+			headers['cf-aig-authorization'] = `Bearer ${env.CLOUDFLARE_GATEWAY_TOKEN}`;
+		}
+
+		const response = await fetch(urlString, {
+			method: 'POST',
+			headers: headers,
+			body: JSON.stringify(body),
+		});
+
+		if (!response.ok) {
+			const errText = await response.text();
+			console.error('Gemini Classification API Error:', response.status, errText);
+			throw new Error(`Gemini API Error: ${response.status}`);
+		}
+
+		// Parse SSE response
+		const reader = response.body?.getReader();
+		const decoder = new TextDecoder();
+		let buffer = '';
+		let usageMetadata = { promptTokenCount: 0, candidatesTokenCount: 0 };
+		let resultText = '';
+
+		if (reader) {
+			while (true) {
+				const { done, value } = await reader.read();
+				if (done) break;
+
+				const chunk = decoder.decode(value, { stream: true });
+				buffer += chunk;
+				const lines = buffer.split('\n');
+				buffer = lines.pop() || '';
+
+				for (const line of lines) {
+					if (line.startsWith('data: ')) {
+						try {
+							const jsonStr = line.slice(6);
+							const data = JSON.parse(jsonStr);
+							if (data.usageMetadata) {
+								usageMetadata = data.usageMetadata;
+							}
+							if (data.candidates && data.candidates[0]?.content?.parts?.[0]?.text) {
+								resultText += data.candidates[0].content.parts[0].text;
+							}
+						} catch (e) {
+							// ignore parse errors
+						}
+					}
+				}
+			}
+		}
+
+		// Log usage with text_classify endpoint
+		if (usageMetadata.promptTokenCount > 0) {
+			const result = calculateCost(modelName, usageMetadata, PRICING_PER_1M);
+			await logUsage(env.logs_db, userId, modelName, result.input.total, result.output.total, result.cost, 'text_classify');
+		}
+
+		// Parse classification result
+		let classificationType: 'word' | 'sentence' | 'multiple_sentences';
+		try {
+			const parsed = JSON.parse(resultText);
+			const type = parsed.type?.toLowerCase();
+
+			if (type && type.includes('multiple_sentences')) {
+				classificationType = 'multiple_sentences';
+			} else if (type && type.includes('word')) {
+				classificationType = 'word';
+			} else {
+				classificationType = 'sentence';
+			}
+		} catch (e) {
+			console.error('Failed to parse classification result:', resultText);
+			classificationType = 'sentence'; // Default fallback
+		}
 
 		// 3. Cache the Result
 		try {
@@ -267,7 +403,7 @@ export class GeminiService {
 		const { OpenRouterService } = await import('./openrouter');
 		const openRouterService = new OpenRouterService();
 
-		return openRouterService.translateWord(env, userId, text, sourceLang, targetLang, sourceLangName, targetLangName, ctx);
+		return openRouterService.translateWord(env, text, sourceLang, targetLang, sourceLangName, targetLangName);
 	}
 
 	async translateImageAndStream(
@@ -282,22 +418,142 @@ export class GeminiService {
 		targetLangName: string,
 		ctx: ExecutionContext
 	): Promise<Response> {
-		// Use OpenRouter for cost-effective image translation
-		const { OpenRouterService } = await import('./openrouter');
-		const openRouterService = new OpenRouterService();
+		// 1. Prepare Gemini Request
+		const apiKey = env.GEMINI_API_KEY;
+		const modelName = 'gemini-3-flash-preview';
 
-		return openRouterService.translateImage(
-			env,
-			userId,
-			imageBase64,
-			mimeType,
-			promptUser,
-			sourceLang,
-			targetLang,
-			sourceLangName,
-			targetLangName,
-			ctx
-		);
+		// Use Cloudflare AI Gateway
+		const urlString = getGatewayUrl(modelName, apiKey);
+
+		// Clean Base64 format (remove data:image/xxx;base64, prefix and newlines)
+		const pureBase64 = imageBase64.replace(/^data:image\/\w+;base64,/, '').replace(/\s/g, '');
+
+		// Construct Prompt based on User's request
+		let finalPrompt = `Analyze the image and extract the text.
+            Then.
+
+            请你考虑语言背景，进行翻译。用户的母语是 ${sourceLangName} ,目前用户希望翻译的语言是 ${targetLangName}
+
+            Output the result in **Markdown** format.
+            - You can output what the original text is, and what the translation is, to make it easier for the user to understand and compare.
+            - Do NOT include any JSON.
+            - **Do NOT use code blocks (\`\`\`) for normal text.** content should be standard text.
+            - Just output the translated text directly.
+
+            所以请你用的所有的解释性的文字都要用用户的母语来说.
+        `;
+
+		if (promptUser && promptUser.trim() !== '') {
+			finalPrompt += `\n\nUser Requirement: ${promptUser}`;
+		}
+
+		const body = {
+			contents: [
+				{
+					parts: [
+						{ text: finalPrompt },
+						{
+							inline_data: {
+								mime_type: mimeType,
+								data: pureBase64,
+							},
+						},
+					],
+				},
+			],
+			generationConfig: {
+				response_mime_type: 'text/plain',
+			},
+		};
+
+		const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+		if (env.CLOUDFLARE_GATEWAY_TOKEN) {
+			headers['cf-aig-authorization'] = `Bearer ${env.CLOUDFLARE_GATEWAY_TOKEN}`;
+		}
+
+		const response = await fetch(urlString, {
+			method: 'POST',
+			headers: headers,
+			body: JSON.stringify(body),
+		});
+
+		if (!response.ok) {
+			const errText = await response.text();
+			console.error('Gemini Image API Error:', response.status, errText);
+			throw new Error(`Gemini Image API Error: ${response.status}`);
+		}
+
+		// Calculate hash BEFORE helper
+		const imageHash = await getMd5(pureBase64);
+
+		// 2. Buffer Stream & Log Usage
+		const reader = response.body?.getReader();
+		const decoder = new TextDecoder();
+
+		let fullText = '';
+		let buffer = '';
+		let usageMetadata = { promptTokenCount: 0, candidatesTokenCount: 0, thoughtsTokenCount: 0 };
+
+		try {
+			if (reader) {
+				while (true) {
+					const { done, value } = await reader.read();
+					if (done) break;
+
+					const chunk = decoder.decode(value, { stream: true });
+					buffer += chunk;
+					const lines = buffer.split('\n');
+					buffer = lines.pop() || '';
+
+					for (const line of lines) {
+						if (line.startsWith('data: ')) {
+							const jsonStr = line.slice(6);
+							try {
+								const data = JSON.parse(jsonStr);
+								if (data.usageMetadata) {
+									usageMetadata = data.usageMetadata;
+								}
+								if (data.candidates && data.candidates[0]?.content?.parts?.[0]?.text) {
+									fullText += data.candidates[0].content.parts[0].text;
+								}
+							} catch (e) {
+								// ignore
+							}
+						}
+					}
+				}
+			}
+
+			// Save Usage Log (Fire and Forget)
+			if (usageMetadata.promptTokenCount > 0) {
+				const result = calculateCost(modelName, usageMetadata, PRICING_PER_1M);
+				const inputTokens = result.input.total;
+				const outputTokens = result.output.total;
+
+				ctx.waitUntil(logUsage(env.logs_db, userId, modelName, inputTokens, outputTokens, result.cost, 'image_translation', imageHash));
+			}
+		} catch (error) {
+			console.error('Image Translation Buffering Error:', error);
+			// If buffering failed, we might want to throw or return partial
+		}
+
+		// 3. Return as Single SSE Event (Mimic structure)
+		const mimicResponse = {
+			candidates: [
+				{
+					content: { parts: [{ text: fullText }] },
+				},
+			],
+		};
+		const sseData = `data: ${JSON.stringify(mimicResponse)}\n\n`;
+
+		return new Response(sseData, {
+			headers: {
+				'Content-Type': 'text/event-stream',
+				'Cache-Control': 'no-cache',
+				Connection: 'keep-alive',
+			},
+		});
 	}
 
 	private async handleStreamResponse(

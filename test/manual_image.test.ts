@@ -71,7 +71,7 @@ describe('Manual Image Translation API', () => {
 			const { done, value } = await reader.read();
 			if (done) break;
 			const chunk = decoder.decode(value, { stream: true });
-			console.log('IMG_RECV:', chunk);
+			// console.log('IMG_RECV:', chunk);
 			fullText += chunk;
 		}
 		console.log('--- End Reading Image Stream ---');
@@ -93,8 +93,8 @@ describe('Manual Image Translation API', () => {
 		expect(usages.length).toBe(1);
 		const usageLog = usages[0];
 		expect(usageLog.endpoint).toBe('image_translation');
-		// model should be 'gemini-3-flash-preview'
-		expect(usageLog.model).toBe('gemini-3-flash-preview');
+		// Model should now be OpenRouter QWEN vision model
+		expect(usageLog.model).toBe('qwen/qwen3-vl-235b-a22b-instruct');
 		expect(usageLog.inputTokens).toBeGreaterThan(0);
 		expect(usageLog.outputTokens).toBeGreaterThan(0);
 		expect(usageLog.costMicros).toBeGreaterThan(0);
@@ -126,7 +126,7 @@ describe('Manual Image Translation API', () => {
 				fullText2 += new TextDecoder().decode(value, { stream: true });
 			}
 		}
-		console.log('IMG_RECV_2:', fullText2);
+		// console.log('IMG_RECV_2:', fullText2);
 
 		// Wait for background logs to save
 		await waitOnExecutionContext(ctx2);
@@ -139,5 +139,5 @@ describe('Manual Image Translation API', () => {
 			.where(eq(usageLogs.userId, userId))
 			.get();
 		expect(usageAfterSecond?.count).toBe(2); // Gateway cache hit still logs usage in our DB
-	}, 30000);
+	}, 90000);
 });

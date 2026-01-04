@@ -273,19 +273,21 @@ describe('Word Translation API', () => {
 
 	it('returns correct SSE format with buffered response (mocked fetch)', async () => {
 		const fetchSpy = vi.spyOn(global, 'fetch');
-		const mockGeminiResponse = JSON.stringify({
-			usageMetadata: { promptTokenCount: 10, candidatesTokenCount: 10 },
-			candidates: [
-				{
-					content: { parts: [{ text: '{"type":"word"}' }] },
-				},
-			],
+
+		// Mock OpenRouter SSE response (our code will convert it to Gemini format)
+		const mockOpenRouterChunk1 = JSON.stringify({
+			choices: [{ delta: { content: '{"type":' } }],
+		});
+		const mockOpenRouterChunk2 = JSON.stringify({
+			choices: [{ delta: { content: '"word"}' } }],
 		});
 
-		// Mock SSE stream
+		// Mock SSE stream in OpenRouter format
 		const stream = new ReadableStream({
 			start(controller) {
-				controller.enqueue(new TextEncoder().encode(`data: ${mockGeminiResponse}\n\n`));
+				controller.enqueue(new TextEncoder().encode(`data: ${mockOpenRouterChunk1}\n\n`));
+				controller.enqueue(new TextEncoder().encode(`data: ${mockOpenRouterChunk2}\n\n`));
+				controller.enqueue(new TextEncoder().encode(`data: [DONE]\n\n`));
 				controller.close();
 			},
 		});
@@ -309,16 +311,25 @@ describe('Word Translation API', () => {
 
 		expect(response.status).toBe(200);
 
-		// Verify structure matches mimicResponse
-		// data: {"candidates":[{"content":{"parts":[{"text":"...
+		// Verify structure matches Gemini format (converted from OpenRouter)
+		// Our code converts OpenRouter streaming chunks into Gemini SSE format
+		// The response should contain multiple SSE events, each with Gemini format
 		const ssePrefix = 'data: ';
-		const dataLine = text.split('\n').find((line: string) => line.startsWith(ssePrefix));
-		expect(dataLine).toBeDefined();
+		const lines = text.split('\n').filter((line: string) => line.startsWith(ssePrefix));
 
-		const jsonStr = dataLine!.slice(ssePrefix.length);
-		const data = JSON.parse(jsonStr);
-		const innerText = data.candidates[0].content.parts[0].text;
+		expect(lines.length).toBeGreaterThan(0);
 
-		expect(innerText).toContain('{"type":"word"}');
+		// Concatenate all content from all SSE events
+		let fullContent = '';
+		for (const line of lines) {
+			const jsonStr = line.slice(ssePrefix.length);
+			const data = JSON.parse(jsonStr);
+			const content = data.candidates?.[0]?.content?.parts?.[0]?.text;
+			if (content) {
+				fullContent += content;
+			}
+		}
+
+		expect(fullContent).toContain('{"type":"word"}');
 	});
 });

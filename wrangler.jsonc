@@ -10,6 +10,35 @@
 	"observability": {
 		"enabled": true
 	},
+
+	/**
+	 * Smart Placement
+	 * https://developers.cloudflare.com/workers/configuration/smart-placement/#smart-placement
+	 */
+	// "placement": {  "mode": "smart" }
+	/**
+	 * Bindings
+	 * Bindings allow your Worker to interact with resources on the Cloudflare Developer Platform, including
+	 * databases, object storage, AI inference, real-time communication and more.
+	 * https://developers.cloudflare.com/workers/runtime-apis/bindings/
+	 */
+	/**
+	 * Environment Variables
+	 * https://developers.cloudflare.com/workers/wrangler/configuration/#environment-variables
+	 * Note: Use secrets to store sensitive data.
+	 * https://developers.cloudflare.com/workers/configuration/secrets/
+	 */
+	// "vars": {  "MY_VARIABLE": "production_value" }
+	"vars": {
+		"ENVIRONMENT": "production",
+		"R2_PUBLIC_DOMAIN": "https://tts.xiaofushi.com"
+	},
+	"r2_buckets": [
+		{
+			"binding": "TTS_BUCKET",
+			"bucket_name": "tts-audio-store"
+		}
+	],
 	"d1_databases": [
 		{
 			"binding": "users_db",
@@ -30,24 +59,45 @@
 			"migrations_dir": "migrations/usage_logs"
 		}
 	],
-	/**
-	 * Smart Placement
-	 * https://developers.cloudflare.com/workers/configuration/smart-placement/#smart-placement
-	 */
-	// "placement": {  "mode": "smart" }
-	/**
-	 * Bindings
-	 * Bindings allow your Worker to interact with resources on the Cloudflare Developer Platform, including
-	 * databases, object storage, AI inference, real-time communication and more.
-	 * https://developers.cloudflare.com/workers/runtime-apis/bindings/
-	 */
-	/**
-	 * Environment Variables
-	 * https://developers.cloudflare.com/workers/wrangler/configuration/#environment-variables
-	 * Note: Use secrets to store sensitive data.
-	 * https://developers.cloudflare.com/workers/configuration/secrets/
-	 */
-	// "vars": {  "MY_VARIABLE": "production_value" }
+
+	// 开发环境配置
+	"env": {
+		"development": {
+			"vars": {
+				"ENVIRONMENT": "development"
+				// 开发环境不需要 R2_PUBLIC_DOMAIN, 会 fallback 到本地 URL
+			},
+			"r2_buckets": [
+				{
+					"binding": "TTS_BUCKET",
+					"bucket_name": "tts-audio-store"
+				}
+			],
+			"d1_databases": [
+				{
+					"binding": "users_db",
+					"database_name": "flash_users_db",
+					"database_id": "444474e4-dd54-437c-a229-8a60cdbdcc51",
+					"migrations_dir": "migrations/users"
+				},
+				{
+					"binding": "words_db",
+					"database_name": "flash_words_db",
+					"database_id": "233d14f8-76c0-48a8-88c0-72dd6bf0f991",
+					"migrations_dir": "migrations/words"
+				},
+				{
+					"binding": "logs_db",
+					"database_name": "flash_logs_db",
+					"database_id": "04669dd8-3cc9-4dc6-b852-82e4412ff9f4",
+					"migrations_dir": "migrations/usage_logs"
+				}
+			]
+
+			// 开发环境复用默认绑定，但通常连的是本地模拟的资源，或者也可以在这里覆盖绑定
+		}
+	}
+
 	/**
 	 * Static Assets
 	 * https://developers.cloudflare.com/workers/static-assets/binding/
@@ -58,10 +108,4 @@
 	 * https://developers.cloudflare.com/workers/wrangler/configuration/#service-bindings
 	 */
 	// "services": [  {   "binding": "MY_SERVICE",   "service": "my-service"  } ],
-	"r2_buckets": [
-		{
-			"binding": "TTS_BUCKET",
-			"bucket_name": "tts-audio-store"
-		}
-	]
 }

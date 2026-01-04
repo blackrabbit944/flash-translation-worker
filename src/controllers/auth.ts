@@ -20,8 +20,19 @@ export async function handleLogin(request: IRequest, env: Env) {
 	if (!user) {
 		// Create new user (id is a 32-char hex string, different from credential)
 		const userId = crypto.randomUUID().replace(/-/g, '');
-		user = await createUser(env.users_db, credential, userId);
-		isNewUser = true;
+		try {
+			user = await createUser(env.users_db, credential, userId);
+			isNewUser = true;
+		} catch (error) {
+			// Race condition: another request might have created the user
+			// Try to find the user again
+			user = await findUserByCredential(env.users_db, credential);
+			if (!user) {
+				// If still not found, re-throw the original error
+				throw error;
+			}
+			// User was created by another request, proceed normally
+		}
 	}
 
 	const now = Math.floor(Date.now() / 1000);

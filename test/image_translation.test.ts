@@ -27,19 +27,21 @@ describe('Image Translation API', () => {
 
 	it('returns correct SSE format with buffered response (mocked fetch)', async () => {
 		const fetchSpy = vi.spyOn(global, 'fetch');
-		const mockGeminiResponse = JSON.stringify({
-			usageMetadata: { promptTokenCount: 10, candidatesTokenCount: 10 },
-			candidates: [
-				{
-					content: { parts: [{ text: 'Image translation result' }] },
-				},
-			],
+
+		// Mock OpenRouter SSE response (our code will convert it to Gemini format)
+		const mockOpenRouterChunk1 = JSON.stringify({
+			choices: [{ delta: { content: 'Image translation ' } }],
+		});
+		const mockOpenRouterChunk2 = JSON.stringify({
+			choices: [{ delta: { content: 'result' } }],
 		});
 
-		// Mock SSE stream from Gemini
+		// Mock SSE stream in OpenRouter format
 		const stream = new ReadableStream({
 			start(controller) {
-				controller.enqueue(new TextEncoder().encode(`data: ${mockGeminiResponse}\n\n`));
+				controller.enqueue(new TextEncoder().encode(`data: ${mockOpenRouterChunk1}\n\n`));
+				controller.enqueue(new TextEncoder().encode(`data: ${mockOpenRouterChunk2}\n\n`));
+				controller.enqueue(new TextEncoder().encode(`data: [DONE]\n\n`));
 				controller.close();
 			},
 		});
@@ -64,16 +66,23 @@ describe('Image Translation API', () => {
 
 		expect(response.status).toBe(200);
 
-		// Verify structure matches mimicResponse
-		// data: {"candidates":[{"content":{"parts":[{"text":"...
+		// Verify structure matches Gemini format (converted from OpenRouter)
 		const ssePrefix = 'data: ';
-		const dataLine = text.split('\n').find((line: string) => line.startsWith(ssePrefix));
-		expect(dataLine).toBeDefined();
+		const lines = text.split('\n').filter((line: string) => line.startsWith(ssePrefix));
 
-		const jsonStr = dataLine!.slice(ssePrefix.length);
-		const data = JSON.parse(jsonStr);
-		const innerText = data.candidates[0].content.parts[0].text;
+		expect(lines.length).toBeGreaterThan(0);
 
-		expect(innerText).toBe('Image translation result');
+		// Concatenate all content from all SSE events
+		let fullContent = '';
+		for (const line of lines) {
+			const jsonStr = line.slice(ssePrefix.length);
+			const data = JSON.parse(jsonStr);
+			const content = data.candidates?.[0]?.content?.parts?.[0]?.text;
+			if (content) {
+				fullContent += content;
+			}
+		}
+
+		expect(fullContent).toBe('Image translation result');
 	});
 });

@@ -441,6 +441,8 @@ export async function handleLongTextTranslation(request: IRequest, env: Env, ctx
 		return new Response('Invalid JSON', { status: 400 });
 	}
 
+	console.log('[LongText] Request Body:', JSON.stringify(body));
+
 	const text = body.text;
 	let sourceLangCode = body.source_language || body.source_lang;
 	let targetLangCode = body.target_language || body.target_lang;
@@ -754,13 +756,23 @@ export async function handleInputCorrection(request: IRequest, env: Env, ctx: Ex
 		return authResponse;
 	}
 
+	const authReq = request as AuthenticatedRequest;
+	if (!authReq.userId) {
+		return new Response('Unauthorized', { status: 401 });
+	}
+
 	try {
-		const correctedText = await openRouterService.correctInput(env, {
-			original: finalOriginal,
-			translated: finalTranslated,
-			sourceLang: finalSourceLang,
-			targetLang: finalTargetLang,
-		});
+		const correctedText = await openRouterService.correctInput(
+			env,
+			{
+				original: finalOriginal,
+				translated: finalTranslated,
+				sourceLang: finalSourceLang,
+				targetLang: finalTargetLang,
+			},
+			authReq.userId,
+			ctx
+		);
 
 		// Mimic Gemini response structure
 		const responseData = {

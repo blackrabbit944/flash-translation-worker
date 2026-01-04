@@ -11,6 +11,8 @@ declare namespace Cloudflare {
 		REVENUECAT_WEBHOOK_SECRET: string;
 		CLOUDFLARE_GATEWAY_TOKEN: string;
 		OPENROUTER_API_KEY: string;
+		ENVIRONMENT: string;
+		R2_PUBLIC_DOMAIN?: string;
 		TTS_BUCKET: R2Bucket;
 		users_db: D1Database;
 		words_db: D1Database;

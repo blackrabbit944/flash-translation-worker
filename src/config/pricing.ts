@@ -13,6 +13,15 @@ export const PRICING_PER_1M: Record<string, { input: number; output?: number; in
 		input: 0.5,
 		output_audio: 10,
 	},
+	// OpenRouter QWEN models
+	'qwen/qwen3-235b-a22b-2507': {
+		input: 0.071, // $0.071 per 1M input tokens
+		output: 0.463, // $0.463 per 1M output tokens
+	},
+	'qwen/qwen3-vl-235b-a22b-instruct': {
+		input: 0.2, // $0.20 per 1M input tokens
+		output: 1.2, // $1.20 per 1M output tokens
+	},
 };
 
 export interface LiveApiPrice {
