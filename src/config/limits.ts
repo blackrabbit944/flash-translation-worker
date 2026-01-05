@@ -1,5 +1,5 @@
 export type ResourceType = 'text_translation' | 'text_classify' | 'image_translation' | 'live_translation' | 'tts' | 'recognition';
-export type MembershipTier = 'FREE' | 'PRO' | 'UNLIMITED' | 'TRIAL_CANCELLED';
+export type MembershipTier = 'FREE' | 'LITE' | 'PRO' | 'UNLIMITED' | 'TRIAL_CANCELLED';
 
 export interface Quota {
 	daily: number;
@@ -16,11 +16,19 @@ export const TIER_LIMITS: Record<MembershipTier, Record<ResourceType, Quota>> = 
 		tts: { daily: 200, monthly: 1000, total: 1000 },
 		recognition: { daily: 600, monthly: 600, total: 600 },
 	},
+	LITE: {
+		text_translation: { daily: 60, monthly: 300 },
+		text_classify: { daily: 60, monthly: 300 },
+		image_translation: { daily: 40, monthly: 40 },
+		live_translation: { daily: 3600, monthly: 3600 }, // 60 mins
+		tts: { daily: 300, monthly: 1500 },
+		recognition: { daily: 100, monthly: 600 },
+	},
 	PRO: {
 		text_translation: { daily: 100, monthly: 500 },
 		text_classify: { daily: 100, monthly: 500 },
 		image_translation: { daily: 100, monthly: 300 },
-		live_translation: { daily: 7200, monthly: 108000 },
+		live_translation: { daily: 36000, monthly: 36000 },
 		tts: { daily: 500, monthly: 3000 },
 		recognition: { daily: 100, monthly: 1000 },
 	},
@@ -28,7 +36,7 @@ export const TIER_LIMITS: Record<MembershipTier, Record<ResourceType, Quota>> = 
 		text_translation: { daily: 500, monthly: 2000 },
 		text_classify: { daily: 500, monthly: 2000 },
 		image_translation: { daily: 150, monthly: 1200 },
-		live_translation: { daily: 72000, monthly: 324000 },
+		live_translation: { daily: 108000, monthly: 108000 },
 		tts: { daily: 1000, monthly: 6000 },
 		recognition: { daily: 100, monthly: 2000 },
 	},

@@ -126,3 +126,20 @@ export const userInitData = sqliteTable('user_init_data', {
 		.notNull()
 		.default(sql`(strftime('%s', 'now') * 1000)`),
 });
+
+export const creditPurchases = sqliteTable('credit_purchases', {
+	id: text('id').primaryKey(),
+	userId: text('user_id').notNull(),
+	productId: text('product_id').notNull(),
+	amountSeconds: integer('amount_seconds').notNull(),
+	createdAt: integer('created_at').notNull(),
+	source: text('source').default('revenuecat'),
+});
+
+export const userCredits = sqliteTable('user_credits', {
+	userId: text('user_id').primaryKey(),
+	balanceSeconds: integer('balance_seconds').notNull().default(0),
+	updatedAt: integer('updated_at')
+		.notNull()
+		.default(sql`(strftime('%s', 'now') * 1000)`),
+});

@@ -318,7 +318,8 @@ export async function handleTranslation(request: IRequest, env: Env, ctx: Execut
 							cost,
 							'live_translation',
 							undefined,
-							durationSeconds
+							durationSeconds,
+							authReq.membershipTier
 						).catch((err) => console.error('[Live] Failed to log usage:', err))
 					);
 				} else {

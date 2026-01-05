@@ -1,6 +1,6 @@
 import { sql, and, eq } from 'drizzle-orm';
 import { createDb } from '../db';
-import { usageLogs, userUsageStats } from '../db/schema';
+import { usageLogs, userUsageStats, userCredits } from '../db/schema';
 
 function getUtcDateStrings(date: Date) {
 	// Format: YYYY-MM-DD
@@ -64,6 +64,12 @@ export async function getDailyUsageCount(d1: D1Database, userId: string, endpoin
 	return stats.daily;
 }
 
+export async function getUserCredits(d1: D1Database, userId: string): Promise<number> {
+	const db = createDb(d1);
+	const result = await db.select().from(userCredits).where(eq(userCredits.userId, userId)).get();
+	return result ? result.balanceSeconds : 0;
+}
+
 export async function logUsage(
 	d1: D1Database,
 	userId: string,
@@ -73,7 +79,8 @@ export async function logUsage(
 	costMicros: number,
 	endpoint: string = 'text_translation',
 	requestHash?: string,
-	durationSeconds?: number
+	durationSeconds?: number,
+	tier?: string // 'FREE' | 'LITE' | 'PRO' | 'UNLIMITED' | 'TRIAL_CANCELLED'
 ): Promise<void> {
 	const db = createDb(d1);
 	const now = new Date();
@@ -100,7 +107,6 @@ export async function logUsage(
 
 	// 2. Update Aggregates (Daily, Monthly, Total)
 	// We prepare the updates. Drizzle's `onConflictDoUpdate` is perfect here.
-
 	const periodUpdates: { type: string; value: string }[] = [
 		{ type: 'daily', value: daily },
 		{ type: 'monthly', value: monthly },
@@ -134,4 +140,72 @@ export async function logUsage(
 	);
 
 	await Promise.all([logPromise, ...upsertPromises]);
+
+	// 3. Deduct Credits for Live Translation Overage
+	if (endpoint === 'live_translation' && duration > 0 && tier) {
+		try {
+			// Tier is passed explicitly, avoiding DB lookups on incorrect DB
+			const { TIER_LIMITS } = await import('../config/limits');
+			// userCredits is now imported at top level
+
+			// @ts-ignore
+			const limits = TIER_LIMITS[tier]?.live_translation;
+			if (!limits) return;
+
+			// Get Updated Stats (we just updated them, so let's fetch the latest values)
+			const stats = await getUsageStats(d1, userId, 'live_translation', false); // No total needed usually
+
+			// Log logic:
+			// Check Daily Limit
+			const dailyLimit = limits.daily;
+			const currentDaily = stats.daily; // This INCLUDES the current duration
+			const prevDaily = currentDaily - duration;
+
+			let deductible = 0;
+
+			// Scenario: Daily Limit exceeded
+			if (currentDaily > dailyLimit) {
+				// If we were already over, deduct full duration.
+				// If we JUST went over, deduct the overflow.
+				if (prevDaily >= dailyLimit) {
+					deductible = duration;
+				} else {
+					deductible = currentDaily - dailyLimit;
+				}
+			}
+
+			// Check Monthly Limit
+			if (deductible < duration) {
+				const monthlyLimit = limits.monthly;
+				const currentMonthly = stats.monthly;
+				const prevMonthly = currentMonthly - duration;
+
+				let monthlyDeductible = 0;
+				if (currentMonthly > monthlyLimit) {
+					if (prevMonthly >= monthlyLimit) {
+						monthlyDeductible = duration;
+					} else {
+						monthlyDeductible = currentMonthly - monthlyLimit;
+					}
+				}
+
+				// Take the maximum required deduction
+				deductible = Math.max(deductible, monthlyDeductible);
+			}
+
+			if (deductible > 0) {
+				console.log(`[Usage] Deducting ${deductible}s from user ${userId} credits (Tier: ${tier}).`);
+				await db
+					.update(userCredits)
+					.set({
+						balanceSeconds: sql`${userCredits.balanceSeconds} - ${deductible}`,
+						updatedAt: Date.now(),
+					})
+					.where(eq(userCredits.userId, userId))
+					.execute();
+			}
+		} catch (e) {
+			console.error('[Usage] Error processing credit deduction:', e);
+		}
+	}
 }

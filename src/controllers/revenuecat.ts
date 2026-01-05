@@ -1,5 +1,8 @@
 import { upsertUserEntitlement } from '../models/subscription';
 import { findUserByCredential } from '../models/user';
+import { createDb } from '../db';
+import { creditPurchases, userCredits } from '../db/schema';
+import { sql } from 'drizzle-orm';
 
 export async function handleRevenueCatWebhook(request: Request, env: Env): Promise<Response> {
 	const authHeader = request.headers.get('Authorization');
@@ -61,9 +64,27 @@ export async function handleRevenueCatWebhook(request: Request, env: Env): Promi
 				await upsertUserEntitlement(env.users_db, targetUserId, entId, expirationAtMs, newStatus, appUserId, isTrial, autoRenew);
 			}
 
-			// Clean up old memberships if this is an upgrade (PRODUCT_CHANGE to UNLIMITED)
-			if (event.type === 'PRODUCT_CHANGE' && entitlementIds.includes('unlimited_member')) {
-				await upsertUserEntitlement(env.users_db, targetUserId, 'pro_member', Date.now(), 'superseded', appUserId);
+			// Clean up old memberships if this is an upgrade/downgrade (PRODUCT_CHANGE)
+			// Priority: UNLIMITED > PRO > LITE
+			// Logic: When a new entitlement comes in via PRODUCT_CHANGE, we supersede conflicting ones.
+			if (event.type === 'PRODUCT_CHANGE') {
+				const hasUnlimited = entitlementIds.includes('unlimited_member');
+				const hasPro = entitlementIds.includes('pro_member');
+				const hasLite = entitlementIds.includes('lite_member');
+
+				if (hasUnlimited) {
+					// Supersede lower tiers
+					await upsertUserEntitlement(env.users_db, targetUserId, 'pro_member', Date.now(), 'superseded', appUserId);
+					await upsertUserEntitlement(env.users_db, targetUserId, 'lite_member', Date.now(), 'superseded', appUserId);
+				} else if (hasPro) {
+					// Supersede lower tiers (lite) and higher tiers (unlimited, if this is a downgrade)
+					await upsertUserEntitlement(env.users_db, targetUserId, 'lite_member', Date.now(), 'superseded', appUserId);
+					await upsertUserEntitlement(env.users_db, targetUserId, 'unlimited_member', Date.now(), 'superseded', appUserId);
+				} else if (hasLite) {
+					// Supersede higher tiers (if this is a downgrade)
+					await upsertUserEntitlement(env.users_db, targetUserId, 'pro_member', Date.now(), 'superseded', appUserId);
+					await upsertUserEntitlement(env.users_db, targetUserId, 'unlimited_member', Date.now(), 'superseded', appUserId);
+				}
 			}
 
 			// Handle Transfers: Remove entitlements from the previous owner
@@ -78,9 +99,88 @@ export async function handleRevenueCatWebhook(request: Request, env: Env): Promi
 			}
 		}
 
+		// Handle Consumable Purchases (Add-ons)
+		if (event.type === 'NON_RENEWING_PURCHASE') {
+			await handleConsumablePurchase(env, targetUserId, event);
+		}
+
 		return new Response('OK', { status: 200 });
 	} catch (error) {
 		console.error('Error processing RevenueCat webhook:', error);
 		return new Response('Internal Server Error', { status: 500 });
+	}
+}
+
+async function handleConsumablePurchase(env: Env, userId: string, event: any) {
+	const transactionId = event.transaction_id || event.id; // RC uses transaction_id usually for purchases
+	const productId = event.product_id;
+	const purchasedAt = event.purchased_at_ms || Date.now();
+
+	let amountSeconds = 0;
+	if (productId === 'packages_499') {
+		amountSeconds = 3600; // 1 hour
+	} else if (productId === 'packages_1999') {
+		amountSeconds = 36000; // 10 hours
+	} else {
+		// Unknown product, maybe ignore?
+		console.warn(`[Consumable] Unknown product_id: ${productId}, ignoring.`);
+		return;
+	}
+
+	const db = createDb(env.logs_db); // Usage logs DB contains credit tables
+
+	// 1. Idempotency Check & Record Purchase
+	// Note: D1 via Drizzle transaction() might fail in workers/test env due to BEGIN/COMMIT support.
+	// We use explicit check-then-write. Race conditions are rare for single-user receipts.
+	try {
+		const existing = await db
+			.select()
+			.from(creditPurchases)
+			.where(sql`${creditPurchases.id} = ${transactionId}`)
+			.get();
+
+		if (existing) {
+			console.log(`[Consumable] Duplicate transaction ${transactionId}, ignoring.`);
+			return;
+		}
+
+		await db
+			.insert(creditPurchases)
+			.values({
+				id: transactionId,
+				userId: userId,
+				productId: productId,
+				amountSeconds: amountSeconds,
+				createdAt: purchasedAt,
+				source: 'revenuecat',
+			})
+			.execute();
+
+		// 2. Update Balance
+		await db
+			.insert(userCredits)
+			.values({
+				userId: userId,
+				balanceSeconds: amountSeconds,
+				updatedAt: Date.now(),
+			})
+			.onConflictDoUpdate({
+				target: userCredits.userId,
+				set: {
+					balanceSeconds: sql`${userCredits.balanceSeconds} + ${amountSeconds}`,
+					updatedAt: Date.now(),
+				},
+			})
+			.execute();
+
+		console.log(`[Consumable] Added ${amountSeconds}s to user ${userId} for product ${productId}.`);
+	} catch (e: any) {
+		// Fallback for race condition on insert
+		if (e.message?.includes('UNIQUE constraint failed') || e.code === 'SQLITE_CONSTRAINT') {
+			console.log(`[Consumable] Duplicate transaction ${transactionId} (constraint), ignoring.`);
+			return;
+		}
+		console.error('[Consumable] Error processing purchase:', e);
+		throw e;
 	}
 }

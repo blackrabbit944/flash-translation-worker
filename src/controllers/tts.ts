@@ -246,9 +246,18 @@ Text to speak: "${text}"
 					languageCode,
 					url: storedUrl,
 				}).catch((err) => console.error('LogTts Error', err)),
-				logUsage(env.logs_db, authReq.userId, modelNameShort, result.input.total, result.output.total, result.cost, 'tts').catch((err) =>
-					console.error('LogUsage TTS Error', err)
-				),
+				logUsage(
+					env.logs_db,
+					authReq.userId,
+					modelNameShort,
+					result.input.total,
+					result.output.total,
+					result.cost,
+					'tts',
+					undefined,
+					0,
+					authReq.membershipTier
+				).catch((err) => console.error('LogUsage TTS Error', err)),
 			])
 		);
 
@@ -479,14 +488,17 @@ Text to speak: "${text}"
 				});
 
 				// Also log usage logs
-				await logUsage(
+				logUsage(
 					env.logs_db,
 					authReq.userId,
 					modelNameShort,
 					costResult.input.total,
 					costResult.output.total,
 					costResult.cost,
-					'tts'
+					'tts',
+					undefined,
+					0,
+					authReq.membershipTier
 				).catch((e) => console.error('LogUsage Error', e));
 			}
 		};

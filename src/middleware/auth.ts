@@ -48,6 +48,8 @@ export async function withAuth(request: IRequest, env: Env, ctx: ExecutionContex
 			tier = 'UNLIMITED';
 		} else if (entitlementIds.includes('pro_member')) {
 			tier = 'PRO';
+		} else if (entitlementIds.includes('lite_member')) {
+			tier = 'LITE';
 		}
 
 		(request as AuthenticatedRequest).membershipTier = tier;
@@ -67,26 +69,57 @@ export async function withAuth(request: IRequest, env: Env, ctx: ExecutionContex
 		const needTotal = limits.total !== undefined;
 		const usage = await getUsageStats(env.logs_db, userId, resourceType, needTotal);
 
+		// Helper to check credit balance if quota exceeded (only for live_translation)
+		const checkCreditsFallback = async () => {
+			if (resourceType !== 'live_translation') return false; // Only live translation supports credits
+
+			// Import locally to avoid circular dep issues or top-level DBinit if any
+			const { createDb } = await import('../db');
+			const { userCredits } = await import('../db/schema');
+			const { eq } = await import('drizzle-orm');
+
+			const db = createDb(env.logs_db);
+			const credit = await db.select().from(userCredits).where(eq(userCredits.userId, userId)).get();
+
+			if (credit && credit.balanceSeconds > 0) {
+				console.log(`[Auth] User ${userId} exceeded quota but has ${credit.balanceSeconds}s credits. Allowing.`);
+				return true;
+			}
+			return false;
+		};
+
 		if (usage.daily >= limits.daily) {
 			console.log('用户超过了日使用量限制');
-			return new Response(`Daily Rate limit exceeded for ${tier} tier on ${resourceType}. Limit: ${limits.daily}, Used: ${usage.daily}`, {
-				status: 429,
-			});
+			const hasCredits = await checkCreditsFallback();
+			if (!hasCredits) {
+				return new Response(`Daily Rate limit exceeded for ${tier} tier on ${resourceType}. Limit: ${limits.daily}, Used: ${usage.daily}`, {
+					status: 429,
+				});
+			}
 		}
 
 		if (usage.monthly >= limits.monthly) {
 			console.log('用户超过了月使用量限制');
-			return new Response(
-				`Monthly Rate limit exceeded for ${tier} tier on ${resourceType}. Limit: ${limits.monthly}, Used: ${usage.monthly}`,
-				{ status: 429 }
-			);
+			const hasCredits = await checkCreditsFallback();
+			if (!hasCredits) {
+				return new Response(
+					`Monthly Rate limit exceeded for ${tier} tier on ${resourceType}. Limit: ${limits.monthly}, Used: ${usage.monthly}`,
+					{ status: 429 }
+				);
+			}
 		}
 
 		if (limits.total !== undefined && usage.total >= limits.total) {
 			console.log('用户超过了总使用量限制');
-			return new Response(`Total Usage limit exceeded for ${tier} tier on ${resourceType}. Limit: ${limits.total}, Used: ${usage.total}`, {
-				status: 429,
-			});
+			const hasCredits = await checkCreditsFallback();
+			if (!hasCredits) {
+				return new Response(
+					`Total Usage limit exceeded for ${tier} tier on ${resourceType}. Limit: ${limits.total}, Used: ${usage.total}`,
+					{
+						status: 429,
+					}
+				);
+			}
 		}
 	} catch (err) {
 		console.error('Auth error:', err);
