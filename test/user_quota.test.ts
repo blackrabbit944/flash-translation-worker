@@ -3,7 +3,7 @@ import { describe, it, expect, beforeAll } from 'vitest';
 import worker from '../src/index';
 // @ts-ignore
 import { createDb } from '../src/db';
-import { usageLogs, userEntitlements } from '../src/db/schema';
+import { usageLogs, userEntitlements, userCredits, creditPurchases } from '../src/db/schema';
 import { sign } from '../src/utils/jwt';
 
 const IncomingRequest = Request<unknown, IncomingRequestCfProperties>;
@@ -101,5 +101,42 @@ describe('User Quota API', () => {
 		expect(textQuota.total.limit).toBe(-1);
 		expect(textQuota.total.remaining).toBe(-1);
 		expect(textQuota.total.used).toBe(0);
+	});
+
+	it('returns correct extra credits for user with add-ons', async () => {
+		const creditUserId = 'test_user_quota_credits';
+		const payload = { uid: creditUserId, exp: Math.floor(Date.now() / 1000) + 3600 };
+		const creditToken = await sign(payload, env.JWT_SECRET);
+
+		// 1. Add Credits (in LOGS DB)
+		const dbLogs = createDb(env.logs_db);
+		await dbLogs
+			.insert(userCredits)
+			.values({
+				userId: creditUserId,
+				balanceSeconds: 3600, // 1 hour
+				updatedAt: Date.now(),
+			})
+			.execute();
+
+		const request = new IncomingRequest('http://example.com/user/quota', {
+			method: 'GET',
+			headers: { Authorization: `Bearer ${creditToken}` },
+		});
+
+		const ctx = createExecutionContext();
+		const response = await worker.fetch(request, env, ctx);
+		await waitOnExecutionContext(ctx);
+
+		expect(response.status).toBe(200);
+		const body = (await response.json()) as any;
+
+		expect(body.tier).toBe('FREE'); // Default is free
+
+		// Check Live Translation Extra Credits
+		const liveQuota = body.quotas.live_translation;
+		expect(liveQuota).toBeDefined();
+		expect(liveQuota.extra).toBeDefined();
+		expect(liveQuota.extra.remaining).toBe(3600);
 	});
 });

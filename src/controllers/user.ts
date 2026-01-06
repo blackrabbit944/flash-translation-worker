@@ -67,10 +67,11 @@ export async function handleGetQuota(request: IRequest, env: Env, ctx: Execution
 				}
 
 				if (type === 'live_translation') {
-					const extraCredits = await getUserCredits(env.users_db, authReq.userId);
+					const extraCredits = await getUserCredits(env.logs_db, authReq.userId);
 					typeQuota.extra = {
 						remaining: extraCredits,
 					};
+					console.log('extraCredits:', extraCredits);
 				}
 
 				quotas[type] = typeQuota;
