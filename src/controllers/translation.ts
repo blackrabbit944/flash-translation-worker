@@ -333,11 +333,13 @@ export async function handleTranslation(request: IRequest, env: Env, ctx: Execut
 		worker.addEventListener('close', closeHandler);
 		serverWebSocket.addEventListener('close', closeHandler);
 		worker.addEventListener('error', (e) => {
-			console.error('[Live] Worker WebSocket error:', e);
+			const msg = (e as any).message || (e as any).error || JSON.stringify(e);
+			console.error(`[Live] Worker WebSocket error: ${msg}`);
 			closeHandler(e);
 		});
 		serverWebSocket.addEventListener('error', (e) => {
-			console.error('[Live] Gemini WebSocket error:', e);
+			const msg = (e as any).message || (e as any).error || JSON.stringify(e);
+			console.error(`[Live] Gemini WebSocket error: ${msg}`);
 			closeHandler(e);
 		});
 
