@@ -19,7 +19,19 @@ export async function handleRevenueCatWebhook(request: Request, env: Env): Promi
 		}
 
 		console.log('[revenuecat-event]', event);
-		const appUserId = event.app_user_id;
+
+		let appUserId = event.app_user_id;
+
+		// Handle TRANSFER events where app_user_id might be missing
+		if (!appUserId && event.type === 'TRANSFER' && event.transferred_to && event.transferred_to.length > 0) {
+			appUserId = event.transferred_to[0];
+			console.log(`[RevenueCat] Resolved app_user_id from transferred_to: ${appUserId}`);
+		}
+
+		if (!appUserId) {
+			console.error('[RevenueCat] Missing app_user_id in event');
+			return new Response('Missing app_user_id', { status: 400 });
+		}
 
 		// 1. Resolve internal UUID from credentials (appUserId)
 		const user = await findUserByCredential(env.users_db, appUserId);

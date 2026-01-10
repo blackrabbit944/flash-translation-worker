@@ -103,7 +103,7 @@ export async function handleTranslation(request: IRequest, env: Env, ctx: Execut
 			},
 			realtimeInputConfig: {
 				automaticActivityDetection: {
-					disabled: true,
+					disabled: params.get('vad') === '1' ? false : true,
 					startOfSpeechSensitivity: 'START_SENSITIVITY_HIGH',
 					endOfSpeechSensitivity: 'END_SENSITIVITY_LOW',
 					prefixPaddingMs: 20,
@@ -334,12 +334,14 @@ export async function handleTranslation(request: IRequest, env: Env, ctx: Execut
 		serverWebSocket.addEventListener('close', closeHandler);
 		worker.addEventListener('error', (e) => {
 			const msg = (e as any).message || (e as any).error || JSON.stringify(e);
-			console.error(`[Live] Worker WebSocket error: ${msg}`);
+			const colo = (request as any).cf?.colo || 'UNKNOWN';
+			console.error(`[Live] Worker WebSocket error (Node: ${colo}): ${msg}`);
 			closeHandler(e);
 		});
 		serverWebSocket.addEventListener('error', (e) => {
 			const msg = (e as any).message || (e as any).error || JSON.stringify(e);
-			console.error(`[Live] Gemini WebSocket error: ${msg}`);
+			const colo = (request as any).cf?.colo || 'UNKNOWN';
+			console.error(`[Live] Gemini WebSocket error (Node: ${colo}): ${msg}`);
 			closeHandler(e);
 		});
 

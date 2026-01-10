@@ -159,7 +159,7 @@ describe('Live Translation Quota', () => {
 				inputTokens: 0,
 				outputTokens: 0,
 				costMicros: 0,
-				durationSeconds: 7201,
+				durationSeconds: 36001,
 				createdAt: Date.now(),
 			})
 			.execute();
@@ -173,7 +173,7 @@ describe('Live Translation Quota', () => {
 				periodType: 'daily',
 				periodValue: getTodayString(),
 				count: 1,
-				durationSeconds: 7201,
+				durationSeconds: 36001,
 				totalTokens: 0,
 			})
 			.execute();
