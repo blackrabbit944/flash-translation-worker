@@ -319,8 +319,8 @@ export async function handleTranslation(request: IRequest, env: Env, ctx: Execut
 							'live_translation',
 							undefined,
 							durationSeconds,
-							authReq.membershipTier
-						).catch((err) => console.error('[Live] Failed to log usage:', err))
+							authReq.membershipTier,
+						).catch((err) => console.error('[Live] Failed to log usage:', err)),
 					);
 				} else {
 					// Fallback to standard Text Pricing if model not in MultiModal config found (unlikely)
@@ -429,7 +429,7 @@ export async function handleTextTranslation(request: IRequest, env: Env, ctx: Ex
 			targetLangCode,
 			sourceLangName,
 			targetLangName,
-			ctx
+			ctx,
 		);
 	} catch (error: any) {
 		console.error('Translation Error:', error);
@@ -486,7 +486,7 @@ export async function handleLongTextTranslation(request: IRequest, env: Env, ctx
 			targetLangCode,
 			sourceLangName,
 			targetLangName,
-			ctx
+			ctx,
 		);
 	} catch (error: any) {
 		console.error('Long Text Translation Error:', error);
@@ -551,7 +551,7 @@ export async function handleImageTranslation(request: IRequest, env: Env, ctx: E
 			targetLangCode,
 			sourceLangName,
 			targetLangName,
-			ctx
+			ctx,
 		);
 	} catch (error: any) {
 		console.error('Image Translation Error:', error);
@@ -601,7 +601,7 @@ export async function handleRecognition(request: IRequest, env: Env, ctx: Execut
 			sourceLangCode,
 			targetLangCode,
 			sourceLangName,
-			targetLangName
+			targetLangName,
 		);
 
 		if (!recognizedText) {
@@ -652,6 +652,62 @@ export async function handleClassifyText(request: IRequest, env: Env, ctx: Execu
 	} catch (error: any) {
 		console.error('Classification Error:', error);
 		return new Response(`Classification failed: ${error.message}`, { status: 500 });
+	}
+}
+
+export async function handleSmartTextTranslation(request: IRequest, env: Env, ctx: ExecutionContext) {
+	// Parse body first to check cache
+	let body;
+	try {
+		body = (await request.json()) as any;
+	} catch (e) {
+		return new Response('Invalid JSON', { status: 400 });
+	}
+
+	const text = body.text;
+	let sourceLangCode = body.source_language || body.source_lang;
+	let targetLangCode = body.target_language || body.target_lang;
+
+	if (sourceLangCode) sourceLangCode = normalizeLanguageTag(sourceLangCode);
+	if (targetLangCode) targetLangCode = normalizeLanguageTag(targetLangCode);
+
+	if (!text || !sourceLangCode || !targetLangCode) {
+		return new Response('Missing required fields: text, source_language, target_language', { status: 400 });
+	}
+
+	if (!isValidLanguageCode(sourceLangCode) || !isValidLanguageCode(targetLangCode)) {
+		return new Response('Invalid language code: must be a valid BCP-47 language tag (e.g. "en-US", "zh-TW")', { status: 400 });
+	}
+
+	// Auth Check
+	const authResponse = await withAuth(request, env, ctx);
+	if (authResponse) {
+		return authResponse;
+	}
+
+	// Auth success
+	const authReq = request as AuthenticatedRequest;
+	if (!authReq.userId) {
+		return new Response('Unauthorized', { status: 401 });
+	}
+
+	const sourceLangName = getLanguageName(sourceLangCode);
+	const targetLangName = getLanguageName(targetLangCode);
+
+	try {
+		return await openRouterService.smartTranslate(
+			env,
+			authReq.userId,
+			text,
+			sourceLangCode,
+			targetLangCode,
+			sourceLangName,
+			targetLangName,
+			ctx,
+		);
+	} catch (error: any) {
+		console.error('Smart Translation Error:', error);
+		return new Response(`Smart translation failed: ${error.message}`, { status: 500 });
 	}
 }
 
@@ -726,7 +782,7 @@ export async function handleWordTranslation(request: IRequest, env: Env, ctx: Ex
 			targetLangCode,
 			sourceLangName,
 			targetLangName,
-			ctx
+			ctx,
 		);
 	} catch (error: any) {
 		console.error('Word Translation Error:', error);
@@ -776,7 +832,7 @@ export async function handleInputCorrection(request: IRequest, env: Env, ctx: Ex
 				targetLang: finalTargetLang,
 			},
 			authReq.userId,
-			ctx
+			ctx,
 		);
 
 		// Mimic Gemini response structure

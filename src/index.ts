@@ -9,6 +9,7 @@ import {
 	handleLongTextTranslation,
 	handleClassifyText,
 	handleWordTranslation,
+	handleSmartTextTranslation,
 	handleInputCorrection,
 } from './controllers/translation';
 import { handleTts, handleTtsPreview, handleTts2 } from './controllers/tts';
@@ -23,6 +24,8 @@ router.get('/translation/live', withAuth, handleTranslation);
 router.post('/translation/correct_input', (req, env, ctx) => handleInputCorrection(req, env, ctx));
 // @ts-ignore
 router.post('/translation/text', (req, env, ctx) => handleTextTranslation(req, env, ctx));
+// @ts-ignore
+router.post('/translation/smart_text', (req, env, ctx) => handleSmartTextTranslation(req, env, ctx));
 // @ts-ignore
 router.post('/translation/classify', (req, env, ctx) => handleClassifyText(req, env, ctx));
 // @ts-ignore

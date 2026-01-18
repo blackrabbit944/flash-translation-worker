@@ -37,7 +37,7 @@ export class GeminiService {
 			.select()
 			.from(translations)
 			.where(
-				and(eq(translations.sourceTextHash, textHash), eq(translations.sourceLang, sourceLang), eq(translations.targetLang, targetLang))
+				and(eq(translations.sourceTextHash, textHash), eq(translations.sourceLang, sourceLang), eq(translations.targetLang, targetLang)),
 			)
 			.get();
 		return cached ? cached.resultJson : null;
@@ -51,7 +51,7 @@ export class GeminiService {
 		targetLang: string,
 		sourceLangName: string,
 		targetLangName: string,
-		ctx: ExecutionContext
+		ctx: ExecutionContext,
 	): Promise<Response> {
 		const textHash = await getMd5(text);
 
@@ -186,7 +186,7 @@ export class GeminiService {
 						.execute()
 						.catch((e) => console.error('Cache save error', e));
 				}
-			}
+			},
 		);
 	}
 
@@ -198,7 +198,7 @@ export class GeminiService {
 		targetLang: string,
 		sourceLangName: string,
 		targetLangName: string,
-		ctx: ExecutionContext
+		ctx: ExecutionContext,
 	): Promise<Response> {
 		// Use OpenRouter for cost-effective long text translation
 		const { OpenRouterService } = await import('./openrouter');
@@ -211,7 +211,7 @@ export class GeminiService {
 		env: Env,
 		userId: string,
 		text: string,
-		ctx: ExecutionContext
+		ctx: ExecutionContext,
 	): Promise<{ type: 'word' | 'sentence' | 'multiple_sentences' }> {
 		const textHash = await getMd5(text);
 
@@ -261,7 +261,7 @@ export class GeminiService {
 		targetLang: string,
 		sourceLangName: string,
 		targetLangName: string,
-		ctx: ExecutionContext
+		ctx: ExecutionContext,
 	): Promise<Response> {
 		// Use OpenRouter for cost-effective word translation
 		const { OpenRouterService } = await import('./openrouter');
@@ -280,7 +280,7 @@ export class GeminiService {
 		targetLang: string,
 		sourceLangName: string,
 		targetLangName: string,
-		ctx: ExecutionContext
+		ctx: ExecutionContext,
 	): Promise<Response> {
 		// Use OpenRouter for cost-effective image translation
 		const { OpenRouterService } = await import('./openrouter');
@@ -296,7 +296,7 @@ export class GeminiService {
 			targetLang,
 			sourceLangName,
 			targetLangName,
-			ctx
+			ctx,
 		);
 	}
 
@@ -308,7 +308,7 @@ export class GeminiService {
 		modelName: string,
 		endpoint: string = 'text_translation',
 		requestHash?: string,
-		onComplete?: (fullText: string) => Promise<void>
+		onComplete?: (fullText: string) => Promise<void>,
 	): Promise<Response> {
 		const { readable, writable } = new TransformStream();
 		const writer = writable.getWriter();
@@ -407,7 +407,7 @@ export class GeminiService {
 		sourceLang: string,
 		targetLang: string,
 		sourceLangName: string,
-		targetLangName: string
+		targetLangName: string,
 	): Promise<string | null> {
 		const apiKey = env.GEMINI_API_KEY;
 		const modelName = 'gemini-2.5-flash';
@@ -492,7 +492,7 @@ export class GeminiService {
 			// Log to DB (Fire and Forget)
 			// Using logic similar to other methods
 			logUsage(env.logs_db, userId, modelName, result.input.total, result.output.total, result.cost, 'intent_recognition').catch((err) =>
-				console.error('Failed to log usage', err)
+				console.error('Failed to log usage', err),
 			);
 		}
 

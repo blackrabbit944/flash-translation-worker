@@ -18,7 +18,7 @@ export class OpenRouterService {
 		model: string,
 		messages: any[],
 		stream: boolean = true,
-		extraBody: any = {}
+		extraBody: any = {},
 	): Promise<Response> {
 		const apiKey = env.OPENROUTER_API_KEY;
 		if (!apiKey) {
@@ -56,7 +56,7 @@ export class OpenRouterService {
 		ctx: ExecutionContext,
 		modelName: string,
 		endpointName: string,
-		contentHash: string
+		contentHash: string,
 	): Promise<Response> {
 		// Return streaming response in SSE format
 		const { readable, writable } = new TransformStream();
@@ -145,7 +145,7 @@ export class OpenRouterService {
 		ctx: ExecutionContext,
 		modelName: string,
 		endpointName: string,
-		contentHash: string
+		contentHash: string,
 	): Promise<any> {
 		const data: any = await response.json();
 
@@ -165,7 +165,7 @@ export class OpenRouterService {
 		modelName: string,
 		endpointName: string,
 		contentHash: string,
-		usageMetadata: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number; cost?: number }
+		usageMetadata: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number; cost?: number },
 	) {
 		const { logUsage } = await import('../models/usage');
 		const { calculateCost } = await import('../utils/cost');
@@ -204,7 +204,7 @@ export class OpenRouterService {
 		});
 
 		ctx.waitUntil(
-			logUsage(env.logs_db, userId, modelName, costResult.input.total, costResult.output.total, finalCostMicros, endpointName, contentHash)
+			logUsage(env.logs_db, userId, modelName, costResult.input.total, costResult.output.total, finalCostMicros, endpointName, contentHash),
 		);
 	}
 
@@ -239,7 +239,7 @@ export class OpenRouterService {
 			env,
 			modelName,
 			[{ role: 'user', content: prompt }],
-			false // Non-streaming
+			false, // Non-streaming
 		);
 
 		const contentHash = await this.getMd5(original);
@@ -257,7 +257,7 @@ export class OpenRouterService {
 		targetLang: string,
 		sourceLangName: string,
 		targetLangName: string,
-		ctx: ExecutionContext
+		ctx: ExecutionContext,
 	): Promise<Response> {
 		const prompt = `You are a smart translator. Analyze the following text and translate it from ${targetLangName} to ${sourceLangName}.
         
@@ -295,7 +295,7 @@ export class OpenRouterService {
 			env,
 			modelName,
 			[{ role: 'user', content: prompt }],
-			true // Enable streaming
+			true, // Enable streaming
 		);
 
 		// Calculate text hash for logging
@@ -312,7 +312,7 @@ export class OpenRouterService {
 		targetLang: string,
 		sourceLangName: string,
 		targetLangName: string,
-		ctx: ExecutionContext
+		ctx: ExecutionContext,
 	): Promise<Response> {
 		const prompt = `
        你是一个专业的翻译员. 用户的母语是 ${sourceLangName} ,他经常需要翻译的语言是 ${targetLangName}.
@@ -333,7 +333,7 @@ export class OpenRouterService {
 			env,
 			modelName,
 			[{ role: 'user', content: prompt }],
-			true // Enable streaming
+			true, // Enable streaming
 		);
 
 		// Calculate text hash for logging
@@ -346,7 +346,7 @@ export class OpenRouterService {
 		env: Env,
 		userId: string,
 		text: string,
-		ctx: ExecutionContext
+		ctx: ExecutionContext,
 	): Promise<{ type: 'word' | 'sentence' | 'multiple_sentences' }> {
 		const prompt = `Classify the following text into one of these types:
            - "word" (Single word or short phrase)
@@ -404,7 +404,7 @@ export class OpenRouterService {
 		targetLang: string,
 		sourceLangName: string,
 		targetLangName: string,
-		ctx: ExecutionContext
+		ctx: ExecutionContext,
 	): Promise<Response> {
 		// Clean Base64 format (remove data:image/xxx;base64, prefix and newlines)
 		const pureBase64 = imageBase64.replace(/^data:image\/\w+;base64,/, '').replace(/\s/g, '');
@@ -451,12 +451,87 @@ export class OpenRouterService {
 					],
 				},
 			],
-			true
+			true,
 		);
 
 		// Calculate image hash for logging
 		const imageHash = await this.getMd5(pureBase64);
 
 		return this.handleStreamResponse(response, env, userId, ctx, modelName, 'image_translation', imageHash);
+	}
+
+	async smartTranslate(
+		env: Env,
+		userId: string,
+		text: string,
+		sourceLang: string,
+		targetLang: string,
+		sourceLangName: string,
+		targetLangName: string,
+		ctx: ExecutionContext,
+	): Promise<Response> {
+		const prompt = `
+        Role: Professional Translator & Dictionary.
+        User Native Language: ${sourceLangName}
+        Target Language: ${targetLangName}
+        
+        Task: Analyze the input text and perform the appropriate action immediately.
+        
+        MODE 1: WORD/PHRASE (Short text, < 5 words usually)
+        If input is a word/phrase, output **ONLY** a valid JSON object (No Markdown blocks).
+        
+        Requirements for JSON:
+        1. "memory_tip" and "explanation" MUST be in **${sourceLangName}** (User's Native Language).
+        2. "examples" MUST contain **2 different** sentences.
+        3. "translation" MUST be the direct meaning in ${sourceLangName}.
+        
+        Format:
+        {
+            "type": "word",
+            "original": "this word in ${sourceLangName}",
+            "translation": "this word in ${targetLangName}",
+            "kana": "...",
+            "examples": [
+                {"original": "${targetLangName}的例句", "translation": "${sourceLangName}的例句"},
+                {"original": "${targetLangName}的例句", "translation": "${sourceLangName}的例句"}
+            ],
+            "memory_tip": "...",
+            "explanation": "...",
+            "english_word": "..."
+        }
+        
+        MODE 2: SENTENCE/PARAGRAPH (Longer text)
+        If input is a sentence/paragraph, output **EXACTLY** this header followed immediately by the translation:
+        [[SENTENCE]]
+        (Then output the translation text stream immediately here. No conversational filler.)
+        
+        CRITICAL INSTRUCTIONS:
+        1. **NO THINKING**. Do not output "Let me think" or "Here is the translation".
+        2. **NO MARKDOWN**. Do not wrap JSON in \`\`\`json ... \`\`\`. Output raw JSON bytes.
+        3. **IMMEDIATE START**. Your first character MUST be \`{\` or \`[\` depending on the mode.
+        
+        Input:
+        "${text}"
+        `;
+
+		// Using the same Qwen model as other methods for consistency
+		const modelName = 'qwen/qwen3-235b-a22b-2507';
+
+		// For smart translate, we want low temperature for determinism (JSON structure)
+		const response = await this.callOpenRouterAPI(
+			env,
+			modelName,
+			[{ role: 'user', content: prompt }],
+			true, // Enable streaming
+			{
+				temperature: 0,
+				// Do NOT force JSON format because it might be text mode
+			},
+		);
+
+		// Calculate text hash for logging
+		const textHash = await this.getMd5(text);
+
+		return this.handleStreamResponse(response, env, userId, ctx, modelName, 'smart_translation', textHash);
 	}
 }

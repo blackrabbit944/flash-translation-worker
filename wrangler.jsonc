@@ -10,6 +10,13 @@
 	"observability": {
 		"enabled": true
 	},
+	"routes": [
+		{
+			"pattern": "flash-api.jianda.com",
+			"custom_domain": true
+		}
+	],
+	"workers_dev": true,
 
 	/**
 	 * Smart Placement
